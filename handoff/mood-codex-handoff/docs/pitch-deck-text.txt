@@ -1,0 +1,142 @@
+SLIDE 01: mood
+TEXT-ONLY PITCH DECK
+The moodboard that writes the brief.
+- An AI canvas that turns image boards into cohesive prompts and text boards into reusable skill.md voice profiles.
+- Functional React MVP.
+- Image boards -> prompts. Text boards -> skill.md.
+
+SLIDE 02: Creative references pile up. Briefs still get rewritten.
+PROBLEM
+Moodboards show taste, but they do not explain it well enough for models, teammates, or repeatable production.
+WHERE THE WORK BREAKS
+- Visual intent stays vague: palette, lighting, texture, framing, and atmosphere remain open to interpretation.
+- Writing voice is hard to transfer: samples reveal rhythm and diction, but rarely become a reusable guide.
+- Prompts get rebuilt from scratch whenever the model, project, or collaborator changes.
+- The missing layer is synthesis. References should become instructions.
+
+SLIDE 03: Why now
+MARKET TIMING
+Teams already use AI, but the handoff from taste to usable direction is still manual.
+SIGNALS
+- McKinsey 2025: 88% of surveyed organizations report regular AI use in at least one business function, but only about one-third have begun to scale AI programs.
+- Adobe 2025: nearly two-thirds of marketers expect content demand to quintuple between 2024 and 2026.
+- Canva/Harris Poll 2025: 84% say poor visual communication causes delays and confusion; the U.S. visual content economy is estimated at $143B annually.
+- Adobe Creators Toolkit 2025: 86% of creators use creative generative AI, and 85% would turn to an AI agent that learns their creative style.
+GAP
+- Generation is getting easier. Precise creative direction is still hard to capture, reuse, and share.
+
+SLIDE 04: mood makes references operational.
+SOLUTION
+Collect on an infinite canvas, then turn the board into an output that travels.
+TWO BOARD TYPES
+- Image board: photos -> image analyses -> one cohesive image-to-text prompt.
+- Text board: writing samples -> synthesized skill.md voice profile.
+RESULT
+- The output can be copied, downloaded, regenerated, or reused in another model or workflow.
+- The product shifts moodboards from "look at this" to "make more like this."
+
+SLIDE 05: The product loop
+HOW IT WORKS
+Boards, canvas, and output stay in one workspace so the creative loop stays tight.
+FLOW
+- Create: click New, name the board, and choose Image or Text.
+- Collect: drop images, text files, selected text, or typed notes.
+- Arrange: pan, zoom, and move items freely on an infinite canvas.
+- Synthesize: output updates when content changes, not when layout changes.
+- Reuse: export the prompt or skill.md as the handoff asset.
+
+SLIDE 06: Image boards turn visual taste into one prompt.
+IMAGE BOARD
+Each photo is read, then the set is fused into a single creative direction.
+WHAT HAPPENS
+- Each image is downscaled and analyzed for subject, composition, color, texture, lighting, atmosphere, and style.
+- The analyses are synthesized into one prompt, not a list of separate references.
+- Add or remove an image and the prompt re-fuses automatically.
+- Moving items never triggers generation.
+EXAMPLE OUTPUT
+- A hushed winter cabin at blue hour, snow-muffled light, warm lamp glow, pine, woodsmoke, indigo and amber.
+
+SLIDE 07: Text boards turn voice into skill.md.
+TEXT BOARD
+Writing samples become a reusable Markdown style profile once the board has enough material.
+HOW IT WORKS
+- Drop text files, paste selected text, or add notes directly on the canvas.
+- Below five notes, the app shows progress toward generation.
+- At five or more notes, it creates a skill.md covering voice, tone, rhythm, diction, punctuation, themes, structure, do/don't rules, and a voice cheat-sheet.
+- Edits update the profile, so the skill stays alive as the board changes.
+USE
+- A portable voice guide for writers, editors, agents, custom GPTs, and model workflows.
+
+SLIDE 08: The live loop stays fast and predictable.
+PRODUCT BEHAVIOR
+The app separates content changes from layout changes, so synthesis only runs when it should.
+RELIABILITY DETAILS
+- Content edits are debounced by 650 ms before output generation.
+- Async generations are token-guarded; stale results are discarded after rapid changes.
+- Pan, zoom, and drag do not trigger model calls.
+- Errors surface with a regenerate path instead of a silent hang.
+- The current MVP stores work in session memory, so a refresh starts clean.
+
+SLIDE 09: Built on a provider-aware completion layer.
+ARCHITECTURE
+The workflow is the product. The model provider can change.
+TODAY
+- Default path uses Claude/Anthropic inside the artifact preview.
+- Image boards send images plus instructions. Text boards send samples plus skill.md instructions.
+- One completion function routes the request based on provider and content type.
+NEXT PRODUCTION STEP
+- Move provider calls behind a small backend so API keys are not exposed in the browser.
+- Keep prompts and Markdown skills model-agnostic so outputs remain portable.
+
+SLIDE 10: For teams that need creative direction to travel.
+USE CASES
+mood is useful anywhere examples need to become repeatable instructions.
+PRIMARY USERS
+- Creative directors: turn visual references into prompts for concepts, campaigns, and art direction.
+- Brand teams: turn visual and verbal systems into repeatable briefing assets.
+- Writers and editors: convert samples into a practical style guide for drafting and review.
+- AI builders: generate prompt and skill assets for agents, evaluations, and custom workflows.
+- Agencies and studios: reduce the translation gap between inspiration, brief, and production.
+
+SLIDE 11: Not a static board. A synthesis layer.
+DIFFERENTIATION
+The core product is not storage. It is conversion from references to reusable direction.
+EDGE
+- Static moodboards store references. mood converts references into instructions.
+- Prompt tools start from text. mood starts from actual image boards and writing samples.
+- Manual style guides are slow. mood creates a working skill.md from examples.
+- The canvas supports spatial thinking while the output panel stays live.
+- The deliverable is the prompt, the style guide, or the brief - not just the board.
+
+SLIDE 12: A narrow wedge with room to expand.
+BUSINESS MODEL AND GTM
+Start with creators and teams already building moodboards, prompt packs, style guides, and AI workflows.
+INITIAL PATH
+- Private beta with creators, brand teams, agencies, and AI workflow builders.
+- Freemium single-user canvas; paid Pro for saved workspaces, exports, and provider configuration.
+- Team tier for shared libraries, version history, brand/style systems, role access, and admin controls.
+- Expansion into prompt testing, creative-brief export packs, design-tool integrations, and enterprise privacy controls.
+- Core metric: reusable outputs created and reused from boards.
+
+SLIDE 13: Built now. Clear next steps.
+ROADMAP AND ASK
+The MVP proves the loop: collect examples, synthesize them, and export reusable creative direction.
+MVP TODAY
+- Functional React app with image boards, text boards, infinite canvas, real model synthesis, copy, download, regenerate, and error states.
+NEXT BUILD MILESTONES
+- Persistent workspaces, shareable boards, version history, team libraries, prompt testing, and export packs.
+ASK
+- Recruit beta users who already use moodboards, prompts, style guides, or AI creative workflows.
+- Target proof: users turn a messy reference set into a prompt or skill.md in minutes, then reuse it in another tool.
+
+SLIDE 14: References
+SOURCES
+Text-only deck sources used for product framing and market context.
+PRODUCT SOURCES
+- User brief and uploaded mood React app.
+- mood 30s spot: "the moodboard that writes the brief" and image boards -> prompts / text boards -> skill.md positioning.
+MARKET SOURCES
+- McKinsey, The State of AI: Global Survey 2025.
+- Canva, Visual Communications Report 2025, with The Harris Poll and Neuro-Insight.
+- Adobe, GenStudio Content Supply Chain press release, March 2025.
+- Adobe, Creators Toolkit Report, October 2025.
