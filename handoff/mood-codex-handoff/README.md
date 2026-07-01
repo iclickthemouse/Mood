@@ -1,123 +1,44 @@
-# mood
+# Mood — app
 
-mood is a React moodboard workspace for turning creative source material into usable model instructions.
+The Mood application: an infinite-canvas workspace that distills reference
+images into one cohesive image-to-text prompt. Vite + React + Tailwind, packaged
+as a Tauri desktop app.
 
-- Image boards turn reference images into one synthesized image-generation prompt.
-- Text boards turn writing samples into a reusable `skill.md` voice file.
-- Image weights let the user decide which references should steer synthesis more heavily.
-- Prompt output formats are: JSON, verbose/FLUX caption, Ideogram JSON, and Midjourney tags.
+See the [repository README](../../README.md) for what Mood is and how to use it.
 
-## Current state
-
-This repo is a Vite handoff build generated from the current single-file React prototype.
-
-The app entry point is:
-
-```txt
-src/App.jsx
-```
-
-Prompt instruction files live in:
-
-```txt
-prompts/mood-image-board-distillation-agent.skill.md
-prompts/mood-text-board-distillation-agent.skill.md
-```
-
-Project context and earlier pitch material live in:
-
-```txt
-docs/
-```
-
-## Run locally
+## Develop
 
 ```bash
 npm install
-npm run dev
+npm run dev          # web dev server (http://localhost:5173)
+npm run tauri:dev    # desktop window (requires the Rust toolchain)
 ```
-
-Then open the local Vite URL.
 
 ## Build
 
 ```bash
-npm run build
+npm run build        # web build -> dist/
+npm run tauri:build  # desktop installer for the current OS
 ```
 
-## Known implementation note
-
-The current prototype can call external model APIs directly from the browser for OpenAI, Gemini, and Ollama. That is useful for testing, but not production-safe for hosted use because browser-side API keys can be exposed. The recommended next build step is to add a server/API proxy and move provider calls behind server-side endpoints.
-
-The `anthropic` provider path was written for an in-artifact environment and may not work as-is in a normal browser build. Codex should either replace it with a server-backed provider or make Anthropic a keyed server-side option.
-
-## First Codex tasks to run
-
-Start with one of these:
+## Structure
 
 ```txt
-Review the mood repo. Explain the current architecture, identify the fastest path to a production-safe model API layer, and propose a small implementation plan before editing files.
+src/App.jsx     UI, image analysis, weighted prompt synthesis
+src/index.css   theme + motion
+src-tauri/      Tauri desktop shell + config
 ```
 
-```txt
-Refactor model provider calls out of src/App.jsx into a small provider module, then add a server/API proxy so browser API keys are not exposed. Keep the existing UI behavior intact.
-```
+## Providers
 
-```txt
-Wire the prompt instruction files in /prompts as the source of truth for image-board and text-board distillation. Remove duplicated long instruction strings from src/App.jsx where practical.
-```
+Cloud providers (OpenAI, Gemini) work in the browser and the desktop app. Local
+models (LM Studio, Ollama) work in the desktop app — model calls are routed
+through Tauri's native HTTP layer (`appFetch` in `src/App.jsx`) so they bypass
+browser CORS and mixed-content limits — or in `npm run dev` locally. API keys
+live only in memory for the session and are never persisted.
 
-```txt
-Add lightweight tests for image weight behavior: default weight is 1.0, weight edits trigger board synthesis, and weight edits do not re-run single-image analysis.
-```
+## Desktop releases
 
-## Desktop app (Tauri)
-
-mood ships as a Tauri desktop app for macOS and Windows. The desktop build is the
-recommended way to use **local models** (LM Studio, Ollama): model calls are routed
-through Tauri's native HTTP plugin (`src/App.jsx` → `appFetch`), which bypasses the
-browser CORS and mixed-content restrictions that block `http://localhost` model
-servers from a hosted web page.
-
-Project layout:
-
-```txt
-src-tauri/            Rust shell + Tauri config
-src-tauri/tauri.conf.json
-src-tauri/capabilities/default.json   HTTP allow-list (providers + localhost)
-```
-
-### Run / build locally
-
-Requires the Rust toolchain (https://rustup.rs) in addition to Node.
-
-```bash
-npm install
-npm run tauri:dev     # hot-reload desktop window
-npm run tauri:build   # produce an installer for the current OS
-```
-
-### Download builds (GitHub Releases)
-
-The `.github/workflows/release.yml` workflow builds **both** platforms in CI:
-
-1. Push a version tag — `git tag v0.1.0 && git push origin v0.1.0` — or run the
-   workflow manually from the Actions tab.
-2. CI builds on a macOS runner (universal `.dmg`, Apple Silicon + Intel) and a
-   Windows runner (`.msi` / `.exe`) and creates a **draft GitHub Release** with
-   the installers attached.
-3. Open the draft under **Releases**, publish it, and share the download links.
-
-### Signing note
-
-CI builds are **unsigned**. macOS users right-click → Open (or
-`xattr -dr com.apple.quarantine /Applications/mood.app`); Windows users click
-"More info" → "Run anyway" on SmartScreen. Add an Apple Developer ID and a
-Windows code-signing certificate to the workflow to remove these prompts.
-
-## Hosting the web demo (GitHub Pages)
-
-`.github/workflows/pages.yml` deploys the web build to GitHub Pages (enable
-**Settings → Pages → Source: GitHub Actions**). The hosted web version works with
-**cloud providers** (OpenAI, Gemini) using the user's own key. Local models do
-**not** work from the hosted HTTPS page — use the desktop app for those.
+`../../.github/workflows/release.yml` builds macOS + Windows in CI. Push a
+version tag (e.g. `v0.1.0`) to produce a draft GitHub Release with installers.
+CI builds are unsigned (see the root README for the first-launch steps).

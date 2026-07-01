@@ -40,8 +40,10 @@ import moodLogo from "./assets/mood-logo.svg";
 
 /* ------------------------------------------------------------------ *
  *  mood — infinite-canvas mood board workspace
- *  Image boards -> one cohesive image-to-text prompt
- *  Text boards  -> a living skill.md writing-style profile
+ *  Drag reference images onto the canvas; mood analyzes each one and
+ *  synthesizes the whole board into one cohesive image-to-text prompt.
+ *  (Voice boards: writing samples -> skill.md style profiles are a v2
+ *  deliverable. The related code below is retained but not user-facing.)
  * ------------------------------------------------------------------ */
 
 const MODEL = "claude-sonnet-4-6";
@@ -2657,7 +2659,7 @@ function SettingsModal({
                 placeholder="http://localhost:11434"
               />
               <TextField
-                label="Text model (synthesis & skill.md)"
+                label="Text model (prompt synthesis)"
                 value={config.ollamaModel}
                 onChange={(v) => setCfg({ ollamaModel: v })}
                 placeholder="llama3.1"
