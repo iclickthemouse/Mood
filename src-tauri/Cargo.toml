@@ -1,6 +1,6 @@
 [package]
 name = "mood"
-version = "0.1.1"
+version = "0.1.2"
 description = "mood — image distillation studio"
 authors = ["mood"]
 edition = "2021"
