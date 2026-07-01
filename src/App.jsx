@@ -76,6 +76,7 @@ const PROMPT_FORMATS = {
   verbose_flux_caption: "Verbose / FLUX caption",
   ideogram_json: "Ideogram JSON",
   midjourney_tags: "Midjourney tags",
+  deep_director: "Deep Director",
 };
 
 function clampImageWeight(value) {
@@ -443,6 +444,9 @@ function extractLmStudioFinalContent(reasoning = "", system = "") {
   if (/verbose_flux_caption/i.test(system) && /PROMPT\s*:/.test(text)) {
     return extractFromMarker(text, /PROMPT\s*:/i);
   }
+  if (/deep_director/i.test(system) && /STYLE NAME\s*:/i.test(text)) {
+    return extractFromMarker(text, /STYLE NAME\s*:/i);
+  }
   if (/midjourney_tags/i.test(system)) {
     const midjourneyMatch = /\/imagine prompt:[\s\S]+/i.exec(text);
     if (midjourneyMatch) return midjourneyMatch[0].trim();
@@ -512,8 +516,34 @@ async function errText(res) {
   return t.slice(0, 180) || res.statusText;
 }
 
-const IMAGE_ANALYSIS_SYSTEM =
-  "You analyze a single reference image for a visual mood board. In 3-5 sentences of plain text (no preamble, no headings, no markdown), describe: subject matter, composition/framing, dominant colors and palette, textures and materials, lighting, atmosphere/mood, and overall style or aesthetic cues. Be specific, concrete, and evocative.";
+const IMAGE_ANALYSIS_SYSTEM = `You analyze a single reference image for a visual mood board.
+
+Return 4-8 sentences of plain text (no preamble, no headings, no markdown, no bullet lists). Cover every applicable dimension below. Be specific, concrete, and evocative.
+
+1. TYPOGRAPHY / TEXT — this is the highest-priority check. If ANY text, lettering, numbers, logos, watermarks, or typographic elements appear in the image:
+   • Transcribe every word EXACTLY as written, preserving spelling, capitalization, punctuation, and line breaks. Wrap each transcription in quotation marks.
+   • Describe the typeface style (serif, sans-serif, script, display, hand-lettered, 3D extruded, neon, etc.), weight (bold, light, condensed), color, size relative to the frame, placement/position, and any effects (drop shadow, outline, glow, distortion, perspective warp).
+   • If there is NO visible text, do not mention typography at all — do not guess or hallucinate text.
+
+2. CULTURAL & STYLE REFERENCES — identify recognizable visual lineages:
+   • Name the specific franchise, film, show, game, artist, studio, movement, or brand the image evokes (e.g. "Pixar Finding Nemo style 3D animation", "Studio Ghibli watercolor", "Shepard Fairey OBEY screenprint aesthetic"). Be precise — "3D animation" alone is not enough when a specific reference is identifiable.
+   • Note recognizable characters, mascots, parodies, or homages and name them.
+
+3. SUBJECT & CHARACTER — describe the primary subject(s): species/type, pose, expression, costume/accessories, distinguishing features. If the subject is a known or identifiable character (real or fictional), name them.
+
+4. COMPOSITION & FRAMING — camera angle, distance, depth of field, subject placement, negative space, perspective.
+
+5. COLOR & PALETTE — dominant and accent colors, temperature, saturation level, palette mood.
+
+6. TEXTURES & MATERIALS — surface qualities, material contrasts, tactile impressions.
+
+7. LIGHTING — source direction, quality (hard/soft), contrast, atmosphere effects (rays, volumetric, caustics, haze).
+
+8. MOOD & ATMOSPHERE — emotional tone, energy level, narrative feeling.
+
+9. MEDIUM & RENDER STYLE — 3D render, photograph, illustration, oil paint, vector, mixed media, pixel art, etc. Note the fidelity level and finish quality.
+
+Order your sentences so typography and cultural references come first (when present), then subject, then remaining dimensions. Fuse naturally — do not use numbers or labels in the output.`;
 
 const IMAGE_SYNTH_SYSTEM = `You are the mood image distillation agent. You synthesize one image board into one precise image-generation prompt.
 
@@ -561,6 +591,16 @@ Named subject preservation:
 - Low-character references may contribute style, lighting, and composition, but they must not replace or erase the named character anchor.
 - If multiple references repeat the same named subject, treat that subject as locked and make the rest of the board orbit around it.
 
+Typography preservation:
+- If any analysis contains quoted text transcriptions (words the model read from the image), those exact strings MUST appear verbatim in the final prompt — preserve the original spelling, capitalization, and punctuation inside quotation marks.
+- Do not paraphrase, summarize, or genericize transcribed text. "FINDING STEVIE" must appear as "FINDING STEVIE", never as "bold stylized typography" or "text elements".
+- Include the typeface style, placement, and visual treatment described in the analysis alongside the verbatim text.
+- If multiple references contain different text, include all of them with their described visual treatments.
+
+Cultural and style reference preservation:
+- If an analysis identifies a specific franchise, studio, artist, movement, or brand reference (e.g. "Pixar Finding Nemo style"), preserve that attribution in the final prompt. Do not dilute "Pixar Finding Nemo style 3D animation" into just "3D animation" or "animated style".
+- Named cultural references are compositional anchors — they communicate more visual information in fewer words than generic descriptions.
+
 Always fuse the board into one coherent result. Never list images separately. Never say moodboard, reference image, image 1, image 2, based on the board, or inspired by these images. Avoid generic hype language such as beautiful, stunning, masterpiece, ultra detailed, award winning, and trending. Use concrete visual language: subject, composition, viewpoint, light, palette, texture, atmosphere, medium, finish, and avoidances.
 
 Return exactly the selected format.
@@ -576,6 +616,41 @@ Return valid JSON only with keys in this order: high_level_description, style_de
 
 midjourney_tags:
 Return one Midjourney-style line only: /imagine prompt: subject-and-scene sentence, comma-separated style tags, composition tags, lighting tags, palette tags, texture tags, atmosphere tags, medium tags --ar aspect_ratio --stylize stylize_value --quality quality_value --chaos chaos_value --no negative_terms. Do not use artist names. Do not add a version flag unless the payload provides one.
+
+deep_director:
+Return plain text only using these exact labeled sections. Write in direct, controlled language — short sections, concrete visual details. Every section should define what must appear, how it should feel, what details matter, and what to avoid.
+
+STYLE NAME: A short, evocative name for the visual direction.
+
+STYLE DEFINITION: 1-2 sentences defining the visual law of the image — the governing principle that makes every other decision coherent.
+
+SUBJECT: Species/type, pose, expression, costume, accessories, distinguishing features. If the subject is a known or recognizable character/parody/homage, name it explicitly. Make the subject specific, not generic.
+
+FACE / IDENTITY DESIGN: Facial features, expression specifics, skin texture, age markers, gaze direction, identity-defining details. Skip if no face is present.
+
+BODY / POSE: Posture, gesture, body language, physical proportions, weight distribution, movement or stillness.
+
+WARDROBE / OBJECTS: Clothing materials, condition, fit, color. Props, accessories — their texture, wear, placement, and relationship to the subject.
+
+TYPOGRAPHY: If text appears, transcribe it exactly in quotes. Describe typeface style, weight, color, size, placement, dimensionality, and effects. If no text, omit this section entirely.
+
+PHOTOGRAPHY / RENDERING: Camera type (real or virtual), lens behavior, focal length feel, depth of field, film stock or render engine quality, grain or noise, sharpness, aberration. Define the boundary: real vs artificial, documentary vs cinematic, photograph vs render.
+
+ENVIRONMENT: Setting, spatial depth, ground plane, background elements, atmospheric particles, weather or underwater conditions, world-building details. Specific materials and surfaces.
+
+LIGHTING: Source direction, quality (hard/soft), color temperature, contrast ratio, shadow behavior, volumetric effects (rays, caustics, haze, glow). Time of day or artificial source.
+
+COMPOSITION: Camera angle, distance, subject placement in frame, negative space, leading lines, depth layers, perspective type.
+
+COLOR & PALETTE: Dominant hues, accent colors, saturation level, temperature, palette mood. Use specific color names, not vague terms.
+
+MOOD: Emotional temperature, energy level, narrative tension, the feeling the image should produce in the viewer. Use contradictions when useful (ordinary but wrong, beautiful but uncomfortable, public but intimate).
+
+NEGATIVE DIRECTION: Explicit failure modes to avoid — wrong genre, wrong lighting, wrong mood, wrong anatomy, wrong surface, wrong setting, over-polish, cartoon exaggeration, fantasy drift, fashion editorial drift, horror drift, CGI uncanny valley. Be specific to this image.
+
+FINAL FORMULA: One single compact sentence that compresses the entire direction into a clean, production-ready prompt.
+
+Avoid these words and phrases in all sections: cinematic masterpiece, hyper realistic, stunning, ultra detailed, award winning, beautiful, breathtaking, iconic, magical, captivating, immersive, trending on artstation.
 
 Before returning, check that the output has no placeholders, no unresolved notes, no hidden analysis commentary, and no unsupported format.`;
 
@@ -601,7 +676,7 @@ async function analyzeImage(cfg, dataUrl) {
     system: IMAGE_ANALYSIS_SYSTEM,
     text: "Analyze this reference image for a mood board.",
     images: [dataUrl],
-    maxTokens: 500,
+    maxTokens: 1200,
   });
 }
 
@@ -707,7 +782,7 @@ async function synthesizeImagePrompt(
           )}. Preserve the exact named subject if character influence is high.\n\n`
         : "\n\n") +
       JSON.stringify(payload, null, 2),
-    maxTokens: selectedFormat === "json" || selectedFormat === "ideogram_json" ? 1800 : 1200,
+    maxTokens: selectedFormat === "deep_director" ? 2400 : selectedFormat === "json" || selectedFormat === "ideogram_json" ? 1800 : 1200,
   });
 }
 
@@ -2482,7 +2557,7 @@ const ONBOARDING_STEPS = [
   {
     icon: SlidersHorizontal,
     title: "Steer the synthesis",
-    body: "Weight each reference and dial in character, style, composition and lighting — then export as JSON, FLUX, Ideogram or Midjourney.",
+    body: "Weight each reference and dial in character, style, composition and lighting — then export as JSON, FLUX, Ideogram, Midjourney or Deep Director.",
   },
 ];
 
