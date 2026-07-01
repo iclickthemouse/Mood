@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="handoff/mood-codex-handoff/src/assets/mood-logo.svg" alt="Mood" width="220" />
+  <img src="src/assets/mood-logo.svg" alt="Mood" width="220" />
 </p>
 
 <h3 align="center">Distill your mood into prompts.</h3>
@@ -43,7 +43,6 @@ Prebuilt macOS and Windows apps are published on the **[Releases](https://github
 ## Run locally (web)
 
 ```bash
-cd handoff/mood-codex-handoff
 npm install
 npm run dev
 ```
@@ -53,7 +52,6 @@ npm run dev
 Requires the [Rust toolchain](https://rustup.rs) in addition to Node.
 
 ```bash
-cd handoff/mood-codex-handoff
 npm install
 npm run tauri:dev     # hot-reload desktop window
 npm run tauri:build   # installer for the current OS
@@ -64,10 +62,9 @@ Both platforms are built in CI by `.github/workflows/release.yml` — push a ver
 ## Repository layout
 
 ```txt
-handoff/mood-codex-handoff/   the app (Vite + React + Tailwind)
-  src/                        UI, image analysis, and prompt synthesis
-  src-tauri/                  desktop shell (Tauri v2)
-.github/workflows/            GitHub Pages + desktop release workflows
+src/                UI, image analysis, and prompt synthesis
+src-tauri/          desktop shell (Tauri v2)
+.github/workflows/  GitHub Pages + desktop release workflows
 ```
 
 ## Roadmap

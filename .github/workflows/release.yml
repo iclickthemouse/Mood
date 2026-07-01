@@ -35,7 +35,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: handoff/mood-codex-handoff/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -45,10 +45,9 @@ jobs:
       - name: Cache Rust build
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: "./handoff/mood-codex-handoff/src-tauri -> target"
+          workspaces: "./src-tauri -> target"
 
       - name: Install frontend dependencies
-        working-directory: handoff/mood-codex-handoff
         run: npm ci
 
       - name: Build app and publish release
@@ -56,7 +55,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectPath: handoff/mood-codex-handoff
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'app-latest' }}
           releaseName: "mood ${{ github.ref_type == 'tag' && github.ref_name || 'latest' }}"
           releaseBody: |
