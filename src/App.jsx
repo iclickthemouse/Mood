@@ -3031,8 +3031,11 @@ function LmStudioSetupModal({ config, onClose, onFinish }) {
                       key={m.id}
                       onClick={() => {
                         setChosen(m.id);
+                        // LM Studio's hub deep link takes owner/name separately
+                        // (same URL its own website builds).
+                        const [owner, name] = m.id.split("/");
                         openExternal(
-                          `lmstudio://open_from_hub?model=${encodeURIComponent(m.id)}`
+                          `lmstudio://model?owner=${encodeURIComponent(owner)}&name=${encodeURIComponent(name)}`
                         );
                       }}
                       className={`flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-xs ${
