@@ -254,13 +254,28 @@ function isTauri() {
 }
 
 let tauriHttpPromise = null;
-async function appFetch(...args) {
-  if (isTauri()) {
-    if (!tauriHttpPromise) tauriHttpPromise = import("@tauri-apps/plugin-http");
-    const mod = await tauriHttpPromise;
-    return mod.fetch(...args);
+async function appFetch(input, init = {}) {
+  const { timeoutMs = 120000, ...rest } = init;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const opts = { ...rest, signal: rest.signal || controller.signal };
+  try {
+    if (isTauri()) {
+      if (!tauriHttpPromise) tauriHttpPromise = import("@tauri-apps/plugin-http");
+      const mod = await tauriHttpPromise;
+      return await mod.fetch(input, opts);
+    }
+    return await fetch(input, opts);
+  } catch (e) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        `Request timed out after ${Math.round(timeoutMs / 1000)}s — is the model server running and reachable?`
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
   }
-  return fetch(...args);
 }
 
 // Unified entry point. `images` is an array of data-URLs (may be empty).
