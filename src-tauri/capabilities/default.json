@@ -16,6 +16,13 @@
         { "url": "https://localhost:*/*" },
         { "url": "https://127.0.0.1:*/*" }
       ]
+    },
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://lmstudio.ai/*" },
+        { "url": "lmstudio:*" }
+      ]
     }
   ]
 }

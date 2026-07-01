@@ -38,6 +38,8 @@ import {
   History,
   RotateCcw,
   GitCompareArrows,
+  CheckCircle2,
+  ExternalLink,
 } from "lucide-react";
 import moodLogo from "./assets/mood-logo.svg";
 
@@ -479,6 +481,22 @@ function extractFromMarker(text, marker) {
     .replace(/^\s*[*-]\s*/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+// Open a URL (or lmstudio:// deep link) in the system browser / handler.
+// In the desktop build the webview can't navigate externally, so we go
+// through the opener plugin; in the browser a plain window.open works.
+async function openExternal(url) {
+  if (isTauri()) {
+    try {
+      const mod = await import("@tauri-apps/plugin-opener");
+      await mod.openUrl(url);
+      return;
+    } catch {
+      /* fall through to window.open */
+    }
+  }
+  window.open(url, "_blank", "noopener");
 }
 
 async function listLmStudioModels(baseUrl) {
@@ -1295,6 +1313,7 @@ export default function Mood() {
   const [showLibrary, setShowLibrary] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showLmSetup, setShowLmSetup] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
 
@@ -1366,7 +1385,8 @@ export default function Mood() {
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== "Escape") return;
-      if (showSettings) setShowSettings(false);
+      if (showLmSetup) setShowLmSetup(false);
+      else if (showSettings) setShowSettings(false);
       else if (showHistory) setShowHistory(false);
       else if (showLibrary) setShowLibrary(false);
       else if (showNew) setShowNew(false);
@@ -1374,10 +1394,10 @@ export default function Mood() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showSettings, showHistory, showLibrary, showNew, showOnboarding, dismissOnboarding]);
+  }, [showLmSetup, showSettings, showHistory, showLibrary, showNew, showOnboarding, dismissOnboarding]);
 
   const anyModalOpen =
-    showSettings || showHistory || showLibrary || showNew || showOnboarding;
+    showSettings || showHistory || showLibrary || showNew || showOnboarding || showLmSetup;
 
   const activeBoard = boards.find((b) => b.id === activeId) || null;
 
@@ -2705,6 +2725,7 @@ export default function Mood() {
           setShowKey={setShowKey}
           testConnection={testConnection}
           testState={testState}
+          onOpenSetup={() => setShowLmSetup(true)}
         />
       )}
 
@@ -2714,6 +2735,22 @@ export default function Mood() {
           onCreate={() => {
             dismissOnboarding();
             setShowNew(true);
+          }}
+          onSetupLocal={() => {
+            dismissOnboarding();
+            setShowLmSetup(true);
+          }}
+        />
+      )}
+
+      {showLmSetup && (
+        <LmStudioSetupModal
+          config={config}
+          onClose={() => setShowLmSetup(false)}
+          onFinish={(model) => {
+            setCfg({ provider: "lmstudio", lmStudioModel: model });
+            setShowLmSetup(false);
+            flash(`Local AI ready — using ${model}.`);
           }}
         />
       )}
@@ -2736,7 +2773,7 @@ const ONBOARDING_STEPS = [
   },
 ];
 
-function OnboardingModal({ onClose, onCreate }) {
+function OnboardingModal({ onClose, onCreate, onSetupLocal }) {
   return (
     <div className="mood-overlay-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
       <div className="mood-pop-in relative flex w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
@@ -2786,6 +2823,23 @@ function OnboardingModal({ onClose, onCreate }) {
           })}
         </div>
 
+        {/* local AI setup */}
+        <div className="mx-6 mb-4 flex items-center justify-between gap-3 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/60 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <Cpu size={16} className="shrink-0 text-indigo-500" />
+            <p className="text-[12px] leading-snug text-slate-600">
+              mood runs on free, private AI on your own machine. First time?
+              We'll set it up together — about five minutes.
+            </p>
+          </div>
+          <button
+            onClick={onSetupLocal}
+            className="shrink-0 rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-100"
+          >
+            Guided setup
+          </button>
+        </div>
+
         {/* actions */}
         <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-6 py-4">
           <button
@@ -2803,6 +2857,224 @@ function OnboardingModal({ onClose, onCreate }) {
               size={15}
               className="transition-transform group-hover:translate-x-0.5"
             />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* -------------------- LM Studio guided setup ------------------- */
+
+const LM_SETUP_MODELS = [
+  {
+    id: "google/gemma-4-12b",
+    label: "Gemma 4 12B",
+    detail: "Best quality — for machines with 16 GB+ RAM",
+  },
+  {
+    id: "google/gemma-3-4b",
+    label: "Gemma 3 4B",
+    detail: "Light and fast — runs comfortably on most machines",
+  },
+];
+
+function pickRecommendedLmModel() {
+  // navigator.deviceMemory is Chrome-only and caps at 8, but it's enough
+  // to steer low-RAM machines toward the smaller model.
+  const mem = typeof navigator !== "undefined" ? navigator.deviceMemory : null;
+  return mem && mem < 8 ? LM_SETUP_MODELS[1].id : LM_SETUP_MODELS[0].id;
+}
+
+function SetupStepBadge({ done, index }) {
+  return done ? (
+    <CheckCircle2 size={22} className="mt-0.5 shrink-0 text-emerald-500" />
+  ) : (
+    <span className="mt-0.5 flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border border-slate-300 bg-white text-[11px] font-semibold text-slate-500">
+      {index}
+    </span>
+  );
+}
+
+function LmStudioSetupModal({ config, onClose, onFinish }) {
+  const [serverUp, setServerUp] = useState(false);
+  const [models, setModels] = useState([]);
+  const [chosen, setChosen] = useState(pickRecommendedLmModel);
+
+  // Poll the local server so each step checks itself off live —
+  // the user never has to click "verify".
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const list = await listLmStudioModels(config.lmStudioUrl);
+        if (!alive) return;
+        setServerUp(true);
+        setModels(list);
+      } catch {
+        if (!alive) return;
+        setServerUp(false);
+        setModels([]);
+      }
+    };
+    poll();
+    const t = setInterval(poll, 2500);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [config.lmStudioUrl]);
+
+  const modelReady = models.length > 0;
+  const allDone = serverUp && modelReady;
+  const bestModel = modelReady
+    ? models.find((m) => m === chosen) ||
+      models.find((m) => /gemma|vision|\bvl\b|llava|pixtral/i.test(m)) ||
+      models[0]
+    : chosen;
+
+  return (
+    <div className="mood-overlay-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+      <div className="mood-pop-in flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <h2 className="flex items-center gap-2.5 font-serif text-xl font-medium tracking-tight text-slate-900">
+            <Cpu size={17} className="text-slate-400" /> Set up local AI
+          </h2>
+          <button
+            onClick={onClose}
+            className="rounded p-1 text-slate-400 hover:bg-slate-100"
+            title="Close"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+          <p className="mb-4 text-[13px] leading-relaxed text-slate-500">
+            mood runs on a free model on your own machine — no account, no API
+            key, nothing leaves your computer. This takes about five minutes,
+            and each step checks itself off as you go.
+          </p>
+
+          {/* step 1 — install & open */}
+          <div className="flex items-start gap-3.5 rounded-xl px-2 py-3">
+            <SetupStepBadge done={serverUp} index={1} />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-semibold text-slate-800">
+                Install and open LM Studio
+              </h3>
+              <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-500">
+                Free desktop app that runs AI models locally. Install it, open
+                it, and skip the model suggestions it shows on first launch.
+              </p>
+              {!serverUp && (
+                <button
+                  onClick={() => openExternal("https://lmstudio.ai/download")}
+                  className="mt-2 flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  <Download size={13} /> Download LM Studio
+                  <ExternalLink size={11} className="text-slate-400" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* step 2 — get a model */}
+          <div className="flex items-start gap-3.5 rounded-xl px-2 py-3">
+            <SetupStepBadge done={modelReady} index={2} />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-semibold text-slate-800">
+                Get a vision model
+              </h3>
+              <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-500">
+                mood needs a model that can see images. Pick one — the button
+                opens it directly in LM Studio, then click{" "}
+                <span className="font-medium text-slate-600">Download</span>{" "}
+                there.
+              </p>
+              {!modelReady && (
+                <div className="mt-2 flex flex-col gap-1.5">
+                  {LM_SETUP_MODELS.map((m) => (
+                    <button
+                      key={m.id}
+                      onClick={() => {
+                        setChosen(m.id);
+                        openExternal(
+                          `lmstudio://open_from_hub?model=${encodeURIComponent(m.id)}`
+                        );
+                      }}
+                      className={`flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-left text-xs ${
+                        chosen === m.id
+                          ? "border-indigo-400 bg-indigo-50/60"
+                          : "border-slate-300 hover:border-slate-400"
+                      }`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block font-semibold text-slate-700">
+                          {m.label}
+                          {chosen === m.id && (
+                            <span className="ml-1.5 rounded bg-indigo-100 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-indigo-600">
+                              recommended
+                            </span>
+                          )}
+                        </span>
+                        <span className="block text-[11px] text-slate-500">
+                          {m.detail}
+                        </span>
+                      </span>
+                      <ExternalLink size={12} className="shrink-0 text-slate-400" />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* step 3 — start the server */}
+          <div className="flex items-start gap-3.5 rounded-xl px-2 py-3">
+            <SetupStepBadge done={allDone} index={3} />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-semibold text-slate-800">
+                Load the model and start the server
+              </h3>
+              <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-500">
+                In LM Studio, open the{" "}
+                <span className="font-medium text-slate-600">Developer</span>{" "}
+                tab, load your downloaded model at the top, and flip the{" "}
+                <span className="font-medium text-slate-600">
+                  Status: Running
+                </span>{" "}
+                switch. mood will spot it automatically.
+              </p>
+              {allDone && (
+                <p className="mt-1.5 text-[12px] font-medium text-emerald-600">
+                  Connected — found {bestModel}.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-6 py-4">
+          <span className="flex items-center gap-2 text-[11px] text-slate-400">
+            {allDone ? (
+              <>
+                <CheckCircle2 size={13} className="text-emerald-500" /> Ready to
+                go
+              </>
+            ) : (
+              <>
+                <Loader2 size={13} className="animate-spin" /> Watching for LM
+                Studio…
+              </>
+            )}
+          </span>
+          <button
+            onClick={() => onFinish(bestModel)}
+            disabled={!allDone}
+            className="flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Start creating <ArrowRight size={15} />
           </button>
         </div>
       </div>
@@ -2938,6 +3210,7 @@ function SettingsModal({
   setShowKey,
   testConnection,
   testState,
+  onOpenSetup,
 }) {
   const p = config.provider;
   const [lmModels, setLmModels] = useState([]);
@@ -3066,6 +3339,18 @@ function SettingsModal({
 
           {p === "lmstudio" && (
             <div>
+              <button
+                onClick={onOpenSetup}
+                className="mb-3 flex w-full items-center justify-between gap-2 rounded-md border border-indigo-200 bg-indigo-50/60 px-3 py-2 text-left text-xs text-slate-600 transition-colors hover:bg-indigo-100"
+              >
+                <span>
+                  <span className="font-semibold text-indigo-600">
+                    New to LM Studio?
+                  </span>{" "}
+                  Guided setup installs it and picks a model with you.
+                </span>
+                <ArrowRight size={13} className="shrink-0 text-indigo-500" />
+              </button>
               <TextField
                 label="LM Studio API path"
                 value={config.lmStudioUrl}
