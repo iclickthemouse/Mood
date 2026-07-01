@@ -76,6 +76,7 @@ const PROMPT_FORMATS = {
   verbose_flux_caption: "Verbose / FLUX caption",
   ideogram_json: "Ideogram JSON",
   midjourney_tags: "Midjourney tags",
+  deep_director: "Deep Director",
 };
 
 function clampImageWeight(value) {
@@ -159,15 +160,15 @@ function weightBand(value) {
  * Claude.ai sandbox they may be blocked by the network/CSP policy.      */
 
 const PROVIDERS = {
-  anthropic: { label: "Claude (in-artifact)", icon: "sparkles", needsKey: false },
-  openai: { label: "OpenAI", icon: "cloud", needsKey: true },
-  gemini: { label: "Google Gemini", icon: "cloud", needsKey: true },
   lmstudio: { label: "LM Studio (local)", icon: "cpu", needsKey: false },
   ollama: { label: "Ollama (local)", icon: "cpu", needsKey: false },
+  openai: { label: "OpenAI", icon: "cloud", needsKey: true },
+  gemini: { label: "Google Gemini", icon: "cloud", needsKey: true },
+  anthropic: { label: "Claude", icon: "sparkles", needsKey: false },
 };
 
 const DEFAULT_CONFIG = {
-  provider: "anthropic",
+  provider: "lmstudio",
   openaiKey: "",
   openaiModel: "gpt-4o-mini",
   geminiKey: "",
@@ -201,6 +202,11 @@ function normalizePersistedConfig(cfg = {}) {
     // native HTTP plugin instead of the /api/lmstudio Vite proxy path.
     if (!next.lmStudioUrl || next.lmStudioUrl === "/api/lmstudio") {
       next.lmStudioUrl = "http://localhost:1234/v1";
+    }
+    // The in-artifact Claude provider has no key mechanism, so it can never
+    // work in the desktop build — move those configs onto the default.
+    if (next.provider === "anthropic") {
+      next.provider = DEFAULT_CONFIG.provider;
     }
   } else if (
     /^https?:\/\/(127\.0\.0\.1|localhost):1234\/v1\/?$/i.test(next.lmStudioUrl || "")
@@ -443,6 +449,9 @@ function extractLmStudioFinalContent(reasoning = "", system = "") {
   if (/verbose_flux_caption/i.test(system) && /PROMPT\s*:/.test(text)) {
     return extractFromMarker(text, /PROMPT\s*:/i);
   }
+  if (/deep_director/i.test(system) && /STYLE NAME\s*:/i.test(text)) {
+    return extractFromMarker(text, /STYLE NAME\s*:/i);
+  }
   if (/midjourney_tags/i.test(system)) {
     const midjourneyMatch = /\/imagine prompt:[\s\S]+/i.exec(text);
     if (midjourneyMatch) return midjourneyMatch[0].trim();
@@ -512,8 +521,34 @@ async function errText(res) {
   return t.slice(0, 180) || res.statusText;
 }
 
-const IMAGE_ANALYSIS_SYSTEM =
-  "You analyze a single reference image for a visual mood board. In 3-5 sentences of plain text (no preamble, no headings, no markdown), describe: subject matter, composition/framing, dominant colors and palette, textures and materials, lighting, atmosphere/mood, and overall style or aesthetic cues. Be specific, concrete, and evocative.";
+const IMAGE_ANALYSIS_SYSTEM = `You analyze a single reference image for a visual mood board.
+
+Return 4-8 sentences of plain text (no preamble, no headings, no markdown, no bullet lists). Cover every applicable dimension below. Be specific, concrete, and evocative.
+
+1. TYPOGRAPHY / TEXT — this is the highest-priority check. If ANY text, lettering, numbers, logos, watermarks, or typographic elements appear in the image:
+   • Transcribe every word EXACTLY as written, preserving spelling, capitalization, punctuation, and line breaks. Wrap each transcription in quotation marks.
+   • Describe the typeface style (serif, sans-serif, script, display, hand-lettered, 3D extruded, neon, etc.), weight (bold, light, condensed), color, size relative to the frame, placement/position, and any effects (drop shadow, outline, glow, distortion, perspective warp).
+   • If there is NO visible text, do not mention typography at all — do not guess or hallucinate text.
+
+2. CULTURAL & STYLE REFERENCES — identify recognizable visual lineages:
+   • Name the specific franchise, film, show, game, artist, studio, movement, or brand the image evokes (e.g. "Pixar Finding Nemo style 3D animation", "Studio Ghibli watercolor", "Shepard Fairey OBEY screenprint aesthetic"). Be precise — "3D animation" alone is not enough when a specific reference is identifiable.
+   • Note recognizable characters, mascots, parodies, or homages and name them.
+
+3. SUBJECT & CHARACTER — describe the primary subject(s): species/type, pose, expression, costume/accessories, distinguishing features. If the subject is a known or identifiable character (real or fictional), name them.
+
+4. COMPOSITION & FRAMING — camera angle, distance, depth of field, subject placement, negative space, perspective.
+
+5. COLOR & PALETTE — dominant and accent colors, temperature, saturation level, palette mood.
+
+6. TEXTURES & MATERIALS — surface qualities, material contrasts, tactile impressions.
+
+7. LIGHTING — source direction, quality (hard/soft), contrast, atmosphere effects (rays, volumetric, caustics, haze).
+
+8. MOOD & ATMOSPHERE — emotional tone, energy level, narrative feeling.
+
+9. MEDIUM & RENDER STYLE — 3D render, photograph, illustration, oil paint, vector, mixed media, pixel art, etc. Note the fidelity level and finish quality.
+
+Order your sentences so typography and cultural references come first (when present), then subject, then remaining dimensions. Fuse naturally — do not use numbers or labels in the output.`;
 
 const IMAGE_SYNTH_SYSTEM = `You are the mood image distillation agent. You synthesize one image board into one precise image-generation prompt.
 
@@ -561,6 +596,16 @@ Named subject preservation:
 - Low-character references may contribute style, lighting, and composition, but they must not replace or erase the named character anchor.
 - If multiple references repeat the same named subject, treat that subject as locked and make the rest of the board orbit around it.
 
+Typography preservation:
+- If any analysis contains quoted text transcriptions (words the model read from the image), those exact strings MUST appear verbatim in the final prompt — preserve the original spelling, capitalization, and punctuation inside quotation marks.
+- Do not paraphrase, summarize, or genericize transcribed text. "FINDING STEVIE" must appear as "FINDING STEVIE", never as "bold stylized typography" or "text elements".
+- Include the typeface style, placement, and visual treatment described in the analysis alongside the verbatim text.
+- If multiple references contain different text, include all of them with their described visual treatments.
+
+Cultural and style reference preservation:
+- If an analysis identifies a specific franchise, studio, artist, movement, or brand reference (e.g. "Pixar Finding Nemo style"), preserve that attribution in the final prompt. Do not dilute "Pixar Finding Nemo style 3D animation" into just "3D animation" or "animated style".
+- Named cultural references are compositional anchors — they communicate more visual information in fewer words than generic descriptions.
+
 Always fuse the board into one coherent result. Never list images separately. Never say moodboard, reference image, image 1, image 2, based on the board, or inspired by these images. Avoid generic hype language such as beautiful, stunning, masterpiece, ultra detailed, award winning, and trending. Use concrete visual language: subject, composition, viewpoint, light, palette, texture, atmosphere, medium, finish, and avoidances.
 
 Return exactly the selected format.
@@ -576,6 +621,41 @@ Return valid JSON only with keys in this order: high_level_description, style_de
 
 midjourney_tags:
 Return one Midjourney-style line only: /imagine prompt: subject-and-scene sentence, comma-separated style tags, composition tags, lighting tags, palette tags, texture tags, atmosphere tags, medium tags --ar aspect_ratio --stylize stylize_value --quality quality_value --chaos chaos_value --no negative_terms. Do not use artist names. Do not add a version flag unless the payload provides one.
+
+deep_director:
+Return plain text only using these exact labeled sections. Write in direct, controlled language — short sections, concrete visual details. Every section should define what must appear, how it should feel, what details matter, and what to avoid.
+
+STYLE NAME: A short, evocative name for the visual direction.
+
+STYLE DEFINITION: 1-2 sentences defining the visual law of the image — the governing principle that makes every other decision coherent.
+
+SUBJECT: Species/type, pose, expression, costume, accessories, distinguishing features. If the subject is a known or recognizable character/parody/homage, name it explicitly. Make the subject specific, not generic.
+
+FACE / IDENTITY DESIGN: Facial features, expression specifics, skin texture, age markers, gaze direction, identity-defining details. Skip if no face is present.
+
+BODY / POSE: Posture, gesture, body language, physical proportions, weight distribution, movement or stillness.
+
+WARDROBE / OBJECTS: Clothing materials, condition, fit, color. Props, accessories — their texture, wear, placement, and relationship to the subject.
+
+TYPOGRAPHY: If text appears, transcribe it exactly in quotes. Describe typeface style, weight, color, size, placement, dimensionality, and effects. If no text, omit this section entirely.
+
+PHOTOGRAPHY / RENDERING: Camera type (real or virtual), lens behavior, focal length feel, depth of field, film stock or render engine quality, grain or noise, sharpness, aberration. Define the boundary: real vs artificial, documentary vs cinematic, photograph vs render.
+
+ENVIRONMENT: Setting, spatial depth, ground plane, background elements, atmospheric particles, weather or underwater conditions, world-building details. Specific materials and surfaces.
+
+LIGHTING: Source direction, quality (hard/soft), color temperature, contrast ratio, shadow behavior, volumetric effects (rays, caustics, haze, glow). Time of day or artificial source.
+
+COMPOSITION: Camera angle, distance, subject placement in frame, negative space, leading lines, depth layers, perspective type.
+
+COLOR & PALETTE: Dominant hues, accent colors, saturation level, temperature, palette mood. Use specific color names, not vague terms.
+
+MOOD: Emotional temperature, energy level, narrative tension, the feeling the image should produce in the viewer. Use contradictions when useful (ordinary but wrong, beautiful but uncomfortable, public but intimate).
+
+NEGATIVE DIRECTION: Explicit failure modes to avoid — wrong genre, wrong lighting, wrong mood, wrong anatomy, wrong surface, wrong setting, over-polish, cartoon exaggeration, fantasy drift, fashion editorial drift, horror drift, CGI uncanny valley. Be specific to this image.
+
+FINAL FORMULA: One single compact sentence that compresses the entire direction into a clean, production-ready prompt.
+
+Avoid these words and phrases in all sections: cinematic masterpiece, hyper realistic, stunning, ultra detailed, award winning, beautiful, breathtaking, iconic, magical, captivating, immersive, trending on artstation.
 
 Before returning, check that the output has no placeholders, no unresolved notes, no hidden analysis commentary, and no unsupported format.`;
 
@@ -601,7 +681,7 @@ async function analyzeImage(cfg, dataUrl) {
     system: IMAGE_ANALYSIS_SYSTEM,
     text: "Analyze this reference image for a mood board.",
     images: [dataUrl],
-    maxTokens: 500,
+    maxTokens: 1200,
   });
 }
 
@@ -707,7 +787,7 @@ async function synthesizeImagePrompt(
           )}. Preserve the exact named subject if character influence is high.\n\n`
         : "\n\n") +
       JSON.stringify(payload, null, 2),
-    maxTokens: selectedFormat === "json" || selectedFormat === "ideogram_json" ? 1800 : 1200,
+    maxTokens: selectedFormat === "deep_director" ? 2400 : selectedFormat === "json" || selectedFormat === "ideogram_json" ? 1800 : 1200,
   });
 }
 
@@ -838,6 +918,7 @@ function summarizeInputChange(prev, curr, prevFormat, currFormat) {
   let weights = 0;
   let dims = 0;
   let focus = 0;
+  let analyses = 0;
   for (const r of curr) {
     const p = prevById.get(r.id);
     if (!p) continue;
@@ -849,10 +930,12 @@ function summarizeInputChange(prev, curr, prevFormat, currFormat) {
       dims++;
     if ((r.positive || "") !== (p.positive || "") || (r.negative || "") !== (p.negative || ""))
       focus++;
+    if ((r.analysis || "") !== (p.analysis || "")) analyses++;
   }
   if (weights) parts.push(`${weights} weight${weights > 1 ? "s" : ""} changed`);
   if (dims) parts.push(`${dims} dimension edit${dims > 1 ? "s" : ""}`);
   if (focus) parts.push(`${focus} focus edit${focus > 1 ? "s" : ""}`);
+  if (analyses) parts.push(`${analyses} analysis edit${analyses > 1 ? "s" : ""}`);
   if (prevFormat !== currFormat)
     parts.push(`format → ${PROMPT_FORMATS[currFormat] || currFormat}`);
   return parts.length ? parts.join(" · ") : "Regenerated (no board change)";
@@ -905,6 +988,7 @@ function ImageItem({
   onDimensionWeightChange,
   onFieldChange,
   onToggleDisabled,
+  onReanalyze,
 }) {
   const weight = clampImageWeight(item.weight);
   const dimensionWeights = normalizeDimensionWeights(item.dimensionWeights);
@@ -962,6 +1046,31 @@ function ImageItem({
               className="block h-16 w-full resize-none rounded border border-slate-200 bg-white p-1.5 text-[11px] leading-snug text-slate-800 outline-none focus:border-rose-400"
             />
           </div>
+          {item.analysis != null && (
+            <div>
+              <span className="mb-1 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                What the model saw
+                <button
+                  onClick={() => onReanalyze(item.id)}
+                  disabled={item.analysisStatus === "loading"}
+                  className="flex items-center gap-1 rounded px-1 py-0.5 normal-case tracking-normal text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+                  title="Re-run analysis on this image (replaces your edits)"
+                >
+                  <RefreshCw
+                    size={10}
+                    className={item.analysisStatus === "loading" ? "animate-spin" : ""}
+                  />
+                  re-analyze
+                </button>
+              </span>
+              <textarea
+                value={item.analysis || ""}
+                onChange={(e) => onFieldChange(item.id, { analysis: e.target.value })}
+                placeholder="edit what the model saw — add anything it missed…"
+                className="block h-24 w-full resize-none rounded border border-slate-200 bg-white p-1.5 text-[10px] leading-snug text-slate-600 outline-none focus:border-slate-400"
+              />
+            </div>
+          )}
         </div>
       ) : (
         <img
@@ -983,7 +1092,17 @@ function ImageItem({
           </span>
         )}
         {item.analysisStatus === "error" && (
-          <span className="text-rose-600">analysis failed</span>
+          <span className="flex items-center gap-1 text-rose-600">
+            analysis failed
+            <button
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => onReanalyze(item.id)}
+              className="rounded p-0.5 text-rose-500 hover:bg-rose-50 hover:text-rose-700"
+              title="Retry analysis"
+            >
+              <RefreshCw size={11} />
+            </button>
+          </span>
         )}
         <span className="ml-auto flex items-center gap-0.5">
           <button
@@ -1164,6 +1283,8 @@ export default function Mood() {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
   const [panning, setPanning] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
+  const dragDepth = useRef(0);
 
   // ui state
   const [showNew, setShowNew] = useState(false);
@@ -1193,7 +1314,16 @@ export default function Mood() {
   const lastSig = useRef({}); // boardId -> signature of last generated content
   const genToken = useRef({}); // boardId -> async token
   const timers = useRef({}); // boardId -> debounce timer
-  const zRef = useRef(10);
+  // Start the z counter above any persisted item so newly dragged cards
+  // always come to the front after a reload.
+  const [initialZ] = useState(() =>
+    Math.max(
+      10,
+      ...initialState.boards.flatMap((b) => (b.items || []).map((it) => it.z || 0))
+    )
+  );
+  const zRef = useRef(initialZ);
+  const toastTimer = useRef(null);
   const configRef = useRef(config);
 
   useEffect(() => void (boardsRef.current = boards), [boards]);
@@ -1232,11 +1362,29 @@ export default function Mood() {
     }
   }, []);
 
+  // Escape closes the topmost open modal.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (showSettings) setShowSettings(false);
+      else if (showHistory) setShowHistory(false);
+      else if (showLibrary) setShowLibrary(false);
+      else if (showNew) setShowNew(false);
+      else if (showOnboarding) dismissOnboarding();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showSettings, showHistory, showLibrary, showNew, showOnboarding, dismissOnboarding]);
+
+  const anyModalOpen =
+    showSettings || showHistory || showLibrary || showNew || showOnboarding;
+
   const activeBoard = boards.find((b) => b.id === activeId) || null;
 
   const flash = useCallback((msg) => {
     setToast(msg);
-    setTimeout(() => setToast(""), 2600);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(""), 2600);
   }, []);
 
   const testConnection = useCallback(async () => {
@@ -1387,6 +1535,7 @@ export default function Mood() {
             dimensionWeights: r.dimensionWeights,
             positive: r.positive || "",
             negative: r.negative || "",
+            analysis: r.analysis || "",
           }))
         );
       } catch (e) {
@@ -1446,7 +1595,7 @@ export default function Mood() {
               (r) =>
                 `${r.id}:${formatImageWeight(r.weight)}:${formatDimensionWeights(
                   r.dimensionWeights
-                )}:p${r.positive || ""}:n${r.negative || ""}`
+                )}:p${r.positive || ""}:n${r.negative || ""}:a${r.analysis || ""}`
             )
             .join("|");
         if (lastSig.current[board.id] !== sig) {
@@ -1509,7 +1658,7 @@ export default function Mood() {
             (r) =>
               `${r.id}:${formatImageWeight(r.weight)}:${formatDimensionWeights(
                 r.dimensionWeights
-              )}:p${r.positive || ""}:n${r.negative || ""}`
+              )}:p${r.positive || ""}:n${r.negative || ""}:a${r.analysis || ""}`
           )
           .join("|");
       setOutput(b.id, "loading", b.output);
@@ -1635,6 +1784,29 @@ export default function Mood() {
     [updateItem]
   );
 
+  // Re-run analysis on a single image — recovers failed analyses and picks
+  // up analysis-prompt improvements without re-dropping the file.
+  const handleReanalyze = useCallback(
+    async (itemId) => {
+      const boardId = activeIdRef.current;
+      const board = boardsRef.current.find((b) => b.id === boardId);
+      const item = board?.items.find((it) => it.id === itemId);
+      if (!board || !item?.src || item.analysisStatus === "loading") return;
+      updateItem(boardId, itemId, { analysisStatus: "loading", analysisError: "" });
+      try {
+        const analysis = await analyzeImage(configRef.current, item.src);
+        updateItem(boardId, itemId, { analysis, analysisStatus: "ready" });
+      } catch (e) {
+        updateItem(boardId, itemId, {
+          analysisStatus: "error",
+          analysisError: e.message,
+        });
+        flash("Image analysis failed — check API access.");
+      }
+    },
+    [updateItem, flash]
+  );
+
   const handleNoteChange = useCallback(
     (itemId, content) => {
       if (!activeIdRef.current) return;
@@ -1653,6 +1825,27 @@ export default function Mood() {
     };
   }, []);
 
+  // Paste images from the clipboard straight onto the active image board.
+  useEffect(() => {
+    const onPaste = (e) => {
+      if (anyModalOpen) return;
+      const tag = e.target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      const board = boardsRef.current.find((b) => b.id === activeIdRef.current);
+      if (!board || board.type !== "image") return;
+      const files = Array.from(e.clipboardData?.files || []).filter((f) =>
+        f.type.startsWith("image/")
+      );
+      if (!files.length) return;
+      e.preventDefault();
+      const c = centerWorld();
+      files.forEach((f, i) => addImage(board.id, f, c.x + i * 26, c.y + i * 26));
+      flash(`Pasted ${files.length} image${files.length > 1 ? "s" : ""}.`);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [anyModalOpen, addImage, centerWorld, flash]);
+
   /* ----------------------- drag & drop in ----------------------- */
 
   const worldPointFromEvent = useCallback((clientX, clientY) => {
@@ -1666,6 +1859,8 @@ export default function Mood() {
   const onDrop = useCallback(
     async (e) => {
       e.preventDefault();
+      dragDepth.current = 0;
+      setDropActive(false);
       const board = boardsRef.current.find((b) => b.id === activeIdRef.current);
       if (!board) return;
       const p = worldPointFromEvent(e.clientX, e.clientY);
@@ -1811,6 +2006,38 @@ export default function Mood() {
   const resetView = () => {
     setScale(1);
     setPan({ x: 0, y: 0 });
+  };
+
+  // Zoom + pan so every item on the active board is visible.
+  const fitView = () => {
+    const el = viewportRef.current;
+    const board = boardsRef.current.find((b) => b.id === activeIdRef.current);
+    const items = board?.items || [];
+    if (!el || !items.length) return resetView();
+    const CARD_W = 220;
+    const CARD_H = 280; // card width is fixed; height varies — close enough to frame
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    items.forEach((it) => {
+      minX = Math.min(minX, it.x);
+      minY = Math.min(minY, it.y);
+      maxX = Math.max(maxX, it.x + CARD_W);
+      maxY = Math.max(maxY, it.y + CARD_H);
+    });
+    const r = el.getBoundingClientRect();
+    const pad = 60;
+    const ns = clamp(
+      Math.min(r.width / (maxX - minX + pad * 2), r.height / (maxY - minY + pad * 2)),
+      0.2,
+      1.5
+    );
+    setScale(ns);
+    setPan({
+      x: (r.width - (maxX - minX) * ns) / 2 - minX * ns,
+      y: (r.height - (maxY - minY) * ns) / 2 - minY * ns,
+    });
   };
 
   /* ------------------------- board ops -------------------------- */
@@ -2070,6 +2297,9 @@ export default function Mood() {
                     {b.name}
                   </button>
                 )}
+                <span className="shrink-0 font-mono text-[10px] text-slate-400 group-hover:hidden">
+                  {(b.items || []).filter((it) => it.kind === "image").length}
+                </span>
                 <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
                   <button
                     onClick={() => {
@@ -2130,7 +2360,7 @@ export default function Mood() {
               <button onClick={() => zoomBy(1 / 1.2)} className="rounded p-1 hover:bg-slate-100" title="Zoom out">
                 <ZoomOut size={14} />
               </button>
-              <button onClick={resetView} className="rounded p-1 hover:bg-slate-100" title="Reset view">
+              <button onClick={fitView} className="rounded p-1 hover:bg-slate-100" title="Fit all items in view">
                 <Maximize2 size={14} />
               </button>
             </div>
@@ -2149,6 +2379,17 @@ export default function Mood() {
             ref={viewportRef}
             onMouseDown={activeBoard ? startPan : undefined}
             onDragOver={(e) => e.preventDefault()}
+            onDragEnter={(e) => {
+              e.preventDefault();
+              if (!activeBoard) return;
+              if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+              dragDepth.current += 1;
+              setDropActive(true);
+            }}
+            onDragLeave={() => {
+              dragDepth.current = Math.max(0, dragDepth.current - 1);
+              if (dragDepth.current === 0) setDropActive(false);
+            }}
             onDrop={onDrop}
             className={`absolute inset-0 ${
               panning ? "cursor-grabbing" : activeBoard ? "cursor-grab" : ""
@@ -2214,6 +2455,7 @@ export default function Mood() {
                         onDimensionWeightChange={handleDimensionWeightChange}
                         onFieldChange={handleImageFieldChange}
                         onToggleDisabled={handleToggleDisabled}
+                        onReanalyze={handleReanalyze}
                       />
                     ) : (
                       <NoteItem
@@ -2229,6 +2471,14 @@ export default function Mood() {
               </>
             )}
           </div>
+
+          {dropActive && activeBoard && (
+            <div className="pointer-events-none absolute inset-2 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-slate-500/60 bg-slate-900/5">
+              <span className="rounded-md bg-slate-900/85 px-3 py-1.5 text-xs font-medium text-white shadow-lg">
+                Drop to add to “{activeBoard.name}”
+              </span>
+            </div>
+          )}
 
           {toast && (
             <div className="absolute bottom-4 left-1/2 z-30 -translate-x-1/2 rounded bg-slate-800 px-3 py-1.5 text-xs text-white shadow-lg">
@@ -2482,7 +2732,7 @@ const ONBOARDING_STEPS = [
   {
     icon: SlidersHorizontal,
     title: "Steer the synthesis",
-    body: "Weight each reference and dial in character, style, composition and lighting — then export as JSON, FLUX, Ideogram or Midjourney.",
+    body: "Weight each reference and dial in character, style, composition and lighting — then export as JSON, FLUX, Ideogram, Midjourney or Deep Director.",
   },
 ];
 
@@ -2750,8 +3000,9 @@ function SettingsModal({
 
           {p === "anthropic" && (
             <div className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
-              Uses the built-in Claude API — no key required. This is the only
-              provider guaranteed to work inside the Claude.ai artifact preview.
+              Uses the built-in Claude API — no key required. Only available
+              when mood runs inside Claude.ai; in the desktop app use a local
+              or API-key provider instead.
             </div>
           )}
 
