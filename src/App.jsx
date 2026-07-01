@@ -162,6 +162,7 @@ function weightBand(value) {
  * Claude.ai sandbox they may be blocked by the network/CSP policy.      */
 
 const PROVIDERS = {
+  hosted: { label: "mood hosted", icon: "sparkles", needsKey: false },
   lmstudio: { label: "LM Studio (local)", icon: "cpu", needsKey: false },
   ollama: { label: "Ollama (local)", icon: "cpu", needsKey: false },
   openai: { label: "OpenAI", icon: "cloud", needsKey: true },
@@ -169,8 +170,21 @@ const PROVIDERS = {
   anthropic: { label: "Claude", icon: "sparkles", needsKey: false },
 };
 
+// Providers where the user supplies the compute (local server or API key).
+const BYO_PROVIDERS = ["lmstudio", "ollama", "openai", "gemini", "anthropic"];
+
+/* mood hosted — a vision model we run for the user (zero setup).
+ * Currently Gemini 2.5 Flash-Lite ($0.10/M in, $0.40/M out — a full board
+ * synthesis costs well under a cent). During beta the key is baked in at
+ * build time via VITE_MOOD_HOSTED_KEY; later this moves behind a proxy
+ * with real accounts (see docs/MONETIZATION.md phase 2).                 */
+const HOSTED_MODEL = "gemini-2.5-flash-lite";
+const HOSTED_KEY = import.meta.env.VITE_MOOD_HOSTED_KEY || "";
+const HOSTED_AVAILABLE = !!HOSTED_KEY;
+
 const DEFAULT_CONFIG = {
-  provider: "lmstudio",
+  provider: HOSTED_AVAILABLE ? "hosted" : "lmstudio",
+  hostedEmail: "",
   openaiKey: "",
   openaiModel: "gpt-4o-mini",
   geminiKey: "",
@@ -219,6 +233,10 @@ function normalizePersistedConfig(cfg = {}) {
   // Migrate retired Gemini model ids to a current default.
   if (!next.geminiModel || /^gemini-(1\.5|2\.0)-/.test(next.geminiModel)) {
     next.geminiModel = DEFAULT_CONFIG.geminiModel;
+  }
+  // Hosted provider only works in builds that ship a hosted key.
+  if (next.provider === "hosted" && !HOSTED_AVAILABLE) {
+    next.provider = "lmstudio";
   }
   return next;
 }
@@ -293,9 +311,23 @@ async function appFetch(input, init = {}) {
   }
 }
 
+function hostedComplete({ system, text, images, maxTokens }) {
+  if (!HOSTED_AVAILABLE) {
+    throw new Error(
+      "The hosted model isn't configured in this build — pick a provider under 'Bring your own model' in settings."
+    );
+  }
+  return geminiComplete(
+    { geminiKey: HOSTED_KEY, geminiModel: HOSTED_MODEL },
+    { system, text, images, maxTokens }
+  );
+}
+
 // Unified entry point. `images` is an array of data-URLs (may be empty).
 async function runCompletion(cfg, { system, text, images = [], maxTokens = 1024 }) {
   switch (cfg.provider) {
+    case "hosted":
+      return hostedComplete({ system, text, images, maxTokens });
     case "openai":
       return openaiComplete(cfg, { system, text, images, maxTokens });
     case "gemini":
@@ -3254,22 +3286,78 @@ function SettingsModal({
             to every board.
           </p>
 
-          <div className="mb-4 grid grid-cols-2 gap-2">
-            {Object.entries(PROVIDERS).map(([key, prov]) => (
-              <button
-                key={key}
-                onClick={() => setCfg({ provider: key })}
-                className={`flex items-center gap-2 rounded-md border p-2.5 text-left text-sm ${
-                  p === key
-                    ? "border-indigo-500 bg-indigo-50 ring-1 ring-indigo-200"
-                    : "border-slate-300 hover:border-slate-400"
-                }`}
-              >
-                <ProviderIcon name={prov.icon} className="shrink-0 text-indigo-500" />
-                <span className="font-medium">{prov.label}</span>
-              </button>
-            ))}
+          {/* hosted */}
+          <div
+            className={`mb-4 rounded-xl border p-3.5 ${
+              p === "hosted"
+                ? "border-indigo-400 bg-indigo-50/50 ring-1 ring-indigo-200"
+                : "border-slate-200 bg-slate-50/60"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                <Sparkles size={15} className="text-indigo-500" /> mood hosted
+              </span>
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
+                free during beta
+              </span>
+            </div>
+            <p className="mt-1.5 text-[12px] leading-relaxed text-slate-500">
+              Zero setup — a fast vision model we host for you. No key, no
+              install, works immediately.
+            </p>
+            {HOSTED_AVAILABLE ? (
+              <>
+                <div className="mt-2.5">
+                  <TextField
+                    label="Email"
+                    value={config.hostedEmail}
+                    onChange={(v) => setCfg({ hostedEmail: v })}
+                    placeholder="you@example.com"
+                    hint="Accounts come later — everything is unlocked for now."
+                  />
+                </div>
+                {p !== "hosted" && (
+                  <button
+                    onClick={() => setCfg({ provider: "hosted" })}
+                    className="mt-1 w-full rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+                  >
+                    Use hosted model
+                  </button>
+                )}
+                {p === "hosted" && (
+                  <p className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-indigo-600">
+                    <CheckCircle2 size={12} /> Active — using {HOSTED_MODEL}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="mt-2 rounded-md bg-amber-50 p-2 text-[11px] text-amber-800">
+                Not available in this build — use a provider below.
+              </p>
+            )}
           </div>
+
+          {/* bring your own */}
+          <label className="mb-4 block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Bring your own model
+            </span>
+            <select
+              value={BYO_PROVIDERS.includes(p) ? p : ""}
+              onChange={(e) => e.target.value && setCfg({ provider: e.target.value })}
+              className="w-full rounded border border-slate-300 px-2.5 py-2 text-sm outline-none focus:border-indigo-400"
+            >
+              <option value="" disabled>
+                Choose a provider…
+              </option>
+              {BYO_PROVIDERS.map((key) => (
+                <option key={key} value={key}>
+                  {PROVIDERS[key].label}
+                </option>
+              ))}
+            </select>
+          </label>
 
           {p === "anthropic" && (
             <div className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
