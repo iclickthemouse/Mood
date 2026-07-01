@@ -35,6 +35,9 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  History,
+  RotateCcw,
+  GitCompareArrows,
 } from "lucide-react";
 import moodLogo from "./assets/mood-logo.svg";
 
@@ -818,6 +821,80 @@ function formatShortDate(value) {
   }
 }
 
+/* ----------------------- prompt history ------------------------ */
+
+const MAX_HISTORY = 30;
+
+// Human-readable "what changed" between two synthesis input snapshots.
+function summarizeInputChange(prev, curr, prevFormat, currFormat) {
+  if (!prev) return "First prompt";
+  const parts = [];
+  const prevById = new Map(prev.map((r) => [r.id, r]));
+  const currById = new Map(curr.map((r) => [r.id, r]));
+  const added = curr.filter((r) => !prevById.has(r.id)).length;
+  const removed = prev.filter((r) => !currById.has(r.id)).length;
+  if (added) parts.push(`+${added} image${added > 1 ? "s" : ""}`);
+  if (removed) parts.push(`−${removed} image${removed > 1 ? "s" : ""}`);
+  let weights = 0;
+  let dims = 0;
+  let focus = 0;
+  for (const r of curr) {
+    const p = prevById.get(r.id);
+    if (!p) continue;
+    if (formatImageWeight(r.weight) !== formatImageWeight(p.weight)) weights++;
+    if (
+      formatDimensionWeights(r.dimensionWeights) !==
+      formatDimensionWeights(p.dimensionWeights)
+    )
+      dims++;
+    if ((r.positive || "") !== (p.positive || "") || (r.negative || "") !== (p.negative || ""))
+      focus++;
+  }
+  if (weights) parts.push(`${weights} weight${weights > 1 ? "s" : ""} changed`);
+  if (dims) parts.push(`${dims} dimension edit${dims > 1 ? "s" : ""}`);
+  if (focus) parts.push(`${focus} focus edit${focus > 1 ? "s" : ""}`);
+  if (prevFormat !== currFormat)
+    parts.push(`format → ${PROMPT_FORMATS[currFormat] || currFormat}`);
+  return parts.length ? parts.join(" · ") : "Regenerated (no board change)";
+}
+
+function tokenizeForDiff(s) {
+  return String(s || "")
+    .split(/(\s+)/)
+    .filter((t) => t.length);
+}
+
+// Word-level diff (LCS). Returns tokens tagged same / add / del.
+function diffTokens(aStr, bStr) {
+  const a = tokenizeForDiff(aStr);
+  const b = tokenizeForDiff(bStr);
+  const n = a.length;
+  const m = b.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+  const out = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      out.push({ type: "same", text: a[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push({ type: "del", text: a[i] });
+      i++;
+    } else {
+      out.push({ type: "add", text: b[j] });
+      j++;
+    }
+  }
+  while (i < n) out.push({ type: "del", text: a[i++] });
+  while (j < m) out.push({ type: "add", text: b[j++] });
+  return out;
+}
+
 /* ------------------------- canvas items ------------------------ */
 
 function ImageItem({
@@ -827,11 +904,13 @@ function ImageItem({
   onWeightChange,
   onDimensionWeightChange,
   onFieldChange,
+  onToggleDisabled,
 }) {
   const weight = clampImageWeight(item.weight);
   const dimensionWeights = normalizeDimensionWeights(item.dimensionWeights);
   const [weightOpen, setWeightOpen] = useState(false);
   const [flipped, setFlipped] = useState(false);
+  const disabled = Boolean(item.disabled);
   const hasOverrides = Boolean(
     (item.positive || "").trim() || (item.negative || "").trim()
   );
@@ -840,8 +919,15 @@ function ImageItem({
     <div
       onMouseDown={(e) => onStartDrag(e, item)}
       style={{ left: item.x, top: item.y, zIndex: item.z || 1, width: 220 }}
-      className="absolute cursor-grab active:cursor-grabbing select-none rounded-md border border-slate-300 bg-white shadow-sm"
+      className={`absolute cursor-grab select-none rounded-md border bg-white shadow-sm active:cursor-grabbing ${
+        disabled ? "border-dashed border-slate-300 opacity-60" : "border-slate-300"
+      }`}
     >
+      {disabled && !flipped && (
+        <div className="pointer-events-none absolute left-2 top-2 z-10 rounded bg-slate-900/85 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-white">
+          Hidden from prompt
+        </div>
+      )}
       {flipped ? (
         <div
           onMouseDown={(e) => e.stopPropagation()}
@@ -900,6 +986,18 @@ function ImageItem({
           <span className="text-rose-600">analysis failed</span>
         )}
         <span className="ml-auto flex items-center gap-0.5">
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => onToggleDisabled(item.id)}
+            className={`flex items-center rounded p-0.5 transition-colors ${
+              disabled
+                ? "text-slate-700 hover:bg-slate-100"
+                : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            }`}
+            title={disabled ? "Include in prompt" : "Hide from prompt"}
+          >
+            {disabled ? <EyeOff size={13} /> : <Eye size={13} />}
+          </button>
           <button
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => setFlipped((f) => !f)}
@@ -1074,6 +1172,7 @@ export default function Mood() {
   const [editName, setEditName] = useState("");
   const [toast, setToast] = useState("");
   const [showLibrary, setShowLibrary] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
@@ -1228,6 +1327,42 @@ export default function Mood() {
     [patchBoard]
   );
 
+  // Append a versioned snapshot of each successful prompt, tagged with a
+  // human-readable summary of what changed since the previous version.
+  const recordHistory = useCallback(
+    (boardId, prompt, format, inputs) => {
+      commit((prev) =>
+        prev.map((b) => {
+          if (b.id !== boardId) return b;
+          const history = b.history || [];
+          const last = history[0];
+          const summary = summarizeInputChange(
+            last?.inputs,
+            inputs,
+            last?.format,
+            format
+          );
+          if (
+            last &&
+            last.prompt === prompt &&
+            summary === "Regenerated (no board change)"
+          )
+            return b;
+          const entry = {
+            id: uid(),
+            ts: new Date().toISOString(),
+            prompt,
+            format,
+            inputs,
+            summary,
+          };
+          return { ...b, history: [entry, ...history].slice(0, MAX_HISTORY) };
+        })
+      );
+    },
+    [commit]
+  );
+
   /* ---------------------- output generation ---------------------- */
 
   const runImageSynth = useCallback(
@@ -1242,12 +1377,24 @@ export default function Mood() {
         );
         if (genToken.current[boardId] !== token) return;
         setOutput(boardId, "ready", prompt);
+        recordHistory(
+          boardId,
+          prompt,
+          selectedFormat || DEFAULT_PROMPT_FORMAT,
+          references.map((r) => ({
+            id: r.id,
+            weight: r.weight,
+            dimensionWeights: r.dimensionWeights,
+            positive: r.positive || "",
+            negative: r.negative || "",
+          }))
+        );
       } catch (e) {
         if (genToken.current[boardId] !== token) return;
         setOutput(boardId, "error", "", e.message || "Generation failed");
       }
     },
-    [setOutput]
+    [setOutput, recordHistory]
   );
 
   const runSkill = useCallback(
@@ -1279,7 +1426,10 @@ export default function Mood() {
       if (board.type === "image") {
         const ready = board.items.filter(
           (it) =>
-            it.kind === "image" && it.analysisStatus === "ready" && it.analysis
+            it.kind === "image" &&
+            it.analysisStatus === "ready" &&
+            it.analysis &&
+            !it.disabled
         );
         if (ready.length === 0) {
           lastSig.current[board.id] = null;
@@ -1343,7 +1493,11 @@ export default function Mood() {
     if (!b) return;
     if (b.type === "image") {
       const ready = b.items.filter(
-        (it) => it.kind === "image" && it.analysisStatus === "ready" && it.analysis
+        (it) =>
+          it.kind === "image" &&
+          it.analysisStatus === "ready" &&
+          it.analysis &&
+          !it.disabled
       );
       if (!ready.length) return;
       const selectedFormat = b.promptFormat || DEFAULT_PROMPT_FORMAT;
@@ -1403,6 +1557,7 @@ export default function Mood() {
           dimensionWeights: { ...DEFAULT_DIMENSION_WEIGHTS },
           positive: "",
           negative: "",
+          disabled: false,
           analysis: null,
           analysisStatus: "loading",
         });
@@ -1465,6 +1620,17 @@ export default function Mood() {
     (itemId, patch) => {
       if (!activeIdRef.current) return;
       updateItem(activeIdRef.current, itemId, patch);
+    },
+    [updateItem]
+  );
+
+  const handleToggleDisabled = useCallback(
+    (itemId) => {
+      const boardId = activeIdRef.current;
+      if (!boardId) return;
+      const board = boardsRef.current.find((b) => b.id === boardId);
+      const item = board?.items.find((it) => it.id === itemId);
+      updateItem(boardId, itemId, { disabled: !item?.disabled });
     },
     [updateItem]
   );
@@ -1698,6 +1864,13 @@ export default function Mood() {
       );
   };
 
+  const restoreVersion = (prompt) => {
+    const id = activeIdRef.current;
+    if (!id) return;
+    setOutput(id, "ready", prompt);
+    flash("Restored this prompt version.");
+  };
+
   const savePromptCard = () => {
     if (!activeBoard || activeBoard.type !== "image") {
       flash("Prompt cards are for image boards.");
@@ -1745,24 +1918,26 @@ export default function Mood() {
 
   /* --------------------- derived render data -------------------- */
 
-  const imageCount = activeBoard
-    ? activeBoard.items.filter((i) => i.kind === "image").length
-    : 0;
-  const analyzingCount = activeBoard
-    ? activeBoard.items.filter(
-        (i) => i.kind === "image" && i.analysisStatus === "loading"
-      ).length
-    : 0;
-  const totalImageWeight = activeBoard
-    ? activeBoard.items
-        .filter((i) => i.kind === "image")
-        .reduce((sum, i) => sum + clampImageWeight(i.weight), 0)
-    : 0;
+  const imageItems = activeBoard
+    ? activeBoard.items.filter((i) => i.kind === "image")
+    : [];
+  const imageCount = imageItems.length;
+  const activeImageItems = imageItems.filter((i) => !i.disabled);
+  const activeImageCount = activeImageItems.length;
+  const hiddenImageCount = imageCount - activeImageCount;
+  const analyzingCount = activeImageItems.filter(
+    (i) => i.analysisStatus === "loading"
+  ).length;
+  const totalImageWeight = activeImageItems.reduce(
+    (sum, i) => sum + clampImageWeight(i.weight),
+    0
+  );
   const noteCount = activeBoard
     ? activeBoard.items.filter(
         (i) => i.kind === "text" && i.content.trim()
       ).length
     : 0;
+  const historyCount = activeBoard?.history?.length || 0;
 
   /* ----------------------------- UI ----------------------------- */
 
@@ -2038,6 +2213,7 @@ export default function Mood() {
                         onWeightChange={handleImageWeightChange}
                         onDimensionWeightChange={handleDimensionWeightChange}
                         onFieldChange={handleImageFieldChange}
+                        onToggleDisabled={handleToggleDisabled}
                       />
                     ) : (
                       <NoteItem
@@ -2072,6 +2248,16 @@ export default function Mood() {
             </span>
             {activeBoard && (
               <div className="flex items-center gap-1">
+                {activeBoard.type === "image" && historyCount > 0 && (
+                  <button
+                    onClick={() => setShowHistory(true)}
+                    className="flex items-center gap-1 rounded px-1.5 py-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    title="Prompt history"
+                  >
+                    <History size={14} />
+                    <span className="font-mono text-[10px]">{historyCount}</span>
+                  </button>
+                )}
                 <button
                   onClick={handleRegenerate}
                   className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
@@ -2116,10 +2302,15 @@ export default function Mood() {
               {activeBoard.type === "image" ? (
                 <div className="flex items-center justify-between gap-2">
                   <span>
-                    {imageCount} image{imageCount === 1 ? "" : "s"}
-                    {imageCount > 0 && (
+                    {activeImageCount} image{activeImageCount === 1 ? "" : "s"}
+                    {activeImageCount > 0 && (
                       <span className="ml-1 text-slate-400">
                         · total weight {totalImageWeight.toFixed(1)}
+                      </span>
+                    )}
+                    {hiddenImageCount > 0 && (
+                      <span className="ml-1 text-slate-400">
+                        · {hiddenImageCount} hidden
                       </span>
                     )}
                     {analyzingCount > 0 && (
@@ -2162,7 +2353,12 @@ export default function Mood() {
             )}
 
             {activeBoard && activeBoard.type === "image" && (
-              <ImageOutput board={activeBoard} analyzing={analyzingCount} count={imageCount} />
+              <ImageOutput
+                board={activeBoard}
+                analyzing={analyzingCount}
+                count={imageCount}
+                activeCount={activeImageCount}
+              />
             )}
 
             {activeBoard && activeBoard.type === "text" && (
@@ -2238,6 +2434,15 @@ export default function Mood() {
           onClose={() => setShowLibrary(false)}
           onCopy={copyLibraryPrompt}
           onDelete={deleteLibraryCard}
+        />
+      )}
+
+      {showHistory && activeBoard && (
+        <PromptHistoryModal
+          board={activeBoard}
+          onClose={() => setShowHistory(false)}
+          onCopy={copyLibraryPrompt}
+          onRestore={restoreVersion}
         />
       )}
 
@@ -2748,11 +2953,164 @@ function SettingsModal({
 
 /* ----------------------- output sub-views ---------------------- */
 
-function ImageOutput({ board, analyzing, count }) {
+/* ----------------------- prompt history modal ------------------ */
+
+function PromptHistoryModal({ board, onClose, onCopy, onRestore }) {
+  const history = board.history || [];
+  const [selectedId, setSelectedId] = useState(history[0]?.id);
+  const [showDiff, setShowDiff] = useState(false);
+  const selected = history.find((h) => h.id === selectedId) || history[0];
+  const current = board.output || "";
+  const isLatest = selected && history[0] && selected.id === history[0].id;
+
+  return (
+    <div className="mood-overlay-in fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
+      <div className="mood-pop-in flex max-h-[88vh] w-full max-w-4xl flex-col rounded-2xl border border-slate-200 bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <h2 className="flex items-center gap-2.5 font-serif text-xl font-medium tracking-tight text-slate-900">
+            <History size={17} className="text-slate-400" /> Prompt history
+          </h2>
+          <button
+            onClick={onClose}
+            className="rounded p-1 text-slate-400 hover:bg-slate-100"
+            title="Close"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        {history.length === 0 || !selected ? (
+          <div className="p-12 text-center text-sm text-slate-400">
+            No prompt versions yet.
+          </div>
+        ) : (
+          <div className="grid min-h-0 flex-1 grid-cols-[240px_1fr] overflow-hidden">
+            {/* version list */}
+            <div className="min-h-0 overflow-y-auto border-r border-slate-200 p-2">
+              {history.map((h, idx) => (
+                <button
+                  key={h.id}
+                  onClick={() => setSelectedId(h.id)}
+                  className={`mb-1 block w-full rounded-lg px-3 py-2 text-left transition-colors ${
+                    h.id === selected.id
+                      ? "bg-slate-100 ring-1 ring-slate-200"
+                      : "hover:bg-slate-50"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-slate-700">
+                      {idx === 0 ? "Latest" : formatShortDate(h.ts)}
+                    </span>
+                    <span className="font-mono text-[9px] uppercase tracking-wide text-slate-400">
+                      {PROMPT_FORMATS[h.format] || h.format}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-slate-500">
+                    {h.summary}
+                  </p>
+                </button>
+              ))}
+            </div>
+
+            {/* detail */}
+            <div className="flex min-h-0 flex-col">
+              <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-4 py-2">
+                <span className="min-w-0 truncate text-[11px] text-slate-500">
+                  {isLatest ? "Latest version" : formatShortDate(selected.ts)} ·{" "}
+                  {selected.summary}
+                </span>
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    onClick={() => setShowDiff((d) => !d)}
+                    disabled={!current || isLatest}
+                    className={`flex items-center gap-1 rounded border px-2 py-1 text-[11px] transition-colors disabled:opacity-40 ${
+                      showDiff
+                        ? "border-slate-300 bg-slate-100 text-slate-700"
+                        : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                    }`}
+                    title={
+                      isLatest
+                        ? "This is the current version"
+                        : "Show changes vs the current prompt"
+                    }
+                  >
+                    <GitCompareArrows size={12} /> Diff
+                  </button>
+                  <button
+                    onClick={() => onCopy(selected.prompt)}
+                    className="flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50"
+                    title="Copy this version"
+                  >
+                    <Copy size={12} /> Copy
+                  </button>
+                  <button
+                    onClick={() => {
+                      onRestore(selected.prompt);
+                      onClose();
+                    }}
+                    className="flex items-center gap-1 rounded bg-indigo-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-indigo-700"
+                    title="Make this the active prompt"
+                  >
+                    <RotateCcw size={12} /> Restore
+                  </button>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                {showDiff && !isLatest ? (
+                  <>
+                    <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-slate-800">
+                      {diffTokens(selected.prompt, current).map((t, i) => {
+                        if (/^\s+$/.test(t.text)) return <span key={i}>{t.text}</span>;
+                        if (t.type === "add")
+                          return (
+                            <span key={i} className="rounded bg-slate-200 text-slate-900">
+                              {t.text}
+                            </span>
+                          );
+                        if (t.type === "del")
+                          return (
+                            <span
+                              key={i}
+                              className="text-slate-400 line-through decoration-slate-400"
+                            >
+                              {t.text}
+                            </span>
+                          );
+                        return <span key={i}>{t.text}</span>;
+                      })}
+                    </p>
+                    <p className="mt-4 flex items-center gap-3 text-[10px] text-slate-400">
+                      <span className="rounded bg-slate-200 px-1 text-slate-900">added</span>
+                      <span className="line-through">removed</span>
+                      <span>from this version → current</span>
+                    </p>
+                  </>
+                ) : (
+                  <p className="whitespace-pre-wrap break-words text-[13px] leading-relaxed text-slate-800">
+                    {selected.prompt}
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ImageOutput({ board, analyzing, count, activeCount }) {
   if (count === 0)
     return (
       <p className="text-sm text-slate-400">
         Drop images on the canvas to start building a cohesive visual prompt.
+      </p>
+    );
+  if (activeCount === 0)
+    return (
+      <p className="text-sm text-slate-400">
+        All {count} image{count === 1 ? " is" : "s are"} hidden. Click the eye
+        icon on an image to include it in the prompt.
       </p>
     );
   if (board.outputStatus === "loading" || (analyzing > 0 && !board.output))
