@@ -168,7 +168,7 @@ const DEFAULT_CONFIG = {
   openaiKey: "",
   openaiModel: "gpt-4o-mini",
   geminiKey: "",
-  geminiModel: "gemini-2.0-flash",
+  geminiModel: "gemini-2.5-flash",
   lmStudioUrl: "/api/lmstudio",
   lmStudioModel: "google/gemma-4-12b",
   ollamaUrl: "http://localhost:11434",
@@ -204,6 +204,10 @@ function normalizePersistedConfig(cfg = {}) {
   ) {
     // Browser build: fold a direct LM Studio URL back onto the dev proxy path.
     next.lmStudioUrl = DEFAULT_CONFIG.lmStudioUrl;
+  }
+  // Migrate retired Gemini model ids to a current default.
+  if (!next.geminiModel || /^gemini-(1\.5|2\.0)-/.test(next.geminiModel)) {
+    next.geminiModel = DEFAULT_CONFIG.geminiModel;
   }
   return next;
 }
@@ -2598,8 +2602,8 @@ function SettingsModal({
                 label="Model"
                 value={config.geminiModel}
                 onChange={(v) => setCfg({ geminiModel: v })}
-                placeholder="gemini-2.0-flash"
-                hint="Flash/Pro models handle both vision and text."
+                placeholder="gemini-2.5-flash"
+                hint="Use a current multimodal model, e.g. gemini-2.5-flash or gemini-2.5-pro (both handle vision + text)."
               />
             </div>
           )}
