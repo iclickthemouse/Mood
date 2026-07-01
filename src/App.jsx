@@ -160,15 +160,15 @@ function weightBand(value) {
  * Claude.ai sandbox they may be blocked by the network/CSP policy.      */
 
 const PROVIDERS = {
-  anthropic: { label: "Claude (in-artifact)", icon: "sparkles", needsKey: false },
-  openai: { label: "OpenAI", icon: "cloud", needsKey: true },
-  gemini: { label: "Google Gemini", icon: "cloud", needsKey: true },
   lmstudio: { label: "LM Studio (local)", icon: "cpu", needsKey: false },
   ollama: { label: "Ollama (local)", icon: "cpu", needsKey: false },
+  openai: { label: "OpenAI", icon: "cloud", needsKey: true },
+  gemini: { label: "Google Gemini", icon: "cloud", needsKey: true },
+  anthropic: { label: "Claude", icon: "sparkles", needsKey: false },
 };
 
 const DEFAULT_CONFIG = {
-  provider: "anthropic",
+  provider: "lmstudio",
   openaiKey: "",
   openaiModel: "gpt-4o-mini",
   geminiKey: "",
@@ -202,6 +202,11 @@ function normalizePersistedConfig(cfg = {}) {
     // native HTTP plugin instead of the /api/lmstudio Vite proxy path.
     if (!next.lmStudioUrl || next.lmStudioUrl === "/api/lmstudio") {
       next.lmStudioUrl = "http://localhost:1234/v1";
+    }
+    // The in-artifact Claude provider has no key mechanism, so it can never
+    // work in the desktop build — move those configs onto the default.
+    if (next.provider === "anthropic") {
+      next.provider = DEFAULT_CONFIG.provider;
     }
   } else if (
     /^https?:\/\/(127\.0\.0\.1|localhost):1234\/v1\/?$/i.test(next.lmStudioUrl || "")
@@ -913,6 +918,7 @@ function summarizeInputChange(prev, curr, prevFormat, currFormat) {
   let weights = 0;
   let dims = 0;
   let focus = 0;
+  let analyses = 0;
   for (const r of curr) {
     const p = prevById.get(r.id);
     if (!p) continue;
@@ -924,10 +930,12 @@ function summarizeInputChange(prev, curr, prevFormat, currFormat) {
       dims++;
     if ((r.positive || "") !== (p.positive || "") || (r.negative || "") !== (p.negative || ""))
       focus++;
+    if ((r.analysis || "") !== (p.analysis || "")) analyses++;
   }
   if (weights) parts.push(`${weights} weight${weights > 1 ? "s" : ""} changed`);
   if (dims) parts.push(`${dims} dimension edit${dims > 1 ? "s" : ""}`);
   if (focus) parts.push(`${focus} focus edit${focus > 1 ? "s" : ""}`);
+  if (analyses) parts.push(`${analyses} analysis edit${analyses > 1 ? "s" : ""}`);
   if (prevFormat !== currFormat)
     parts.push(`format → ${PROMPT_FORMATS[currFormat] || currFormat}`);
   return parts.length ? parts.join(" · ") : "Regenerated (no board change)";
@@ -980,6 +988,7 @@ function ImageItem({
   onDimensionWeightChange,
   onFieldChange,
   onToggleDisabled,
+  onReanalyze,
 }) {
   const weight = clampImageWeight(item.weight);
   const dimensionWeights = normalizeDimensionWeights(item.dimensionWeights);
@@ -1037,6 +1046,31 @@ function ImageItem({
               className="block h-16 w-full resize-none rounded border border-slate-200 bg-white p-1.5 text-[11px] leading-snug text-slate-800 outline-none focus:border-rose-400"
             />
           </div>
+          {item.analysis != null && (
+            <div>
+              <span className="mb-1 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                What the model saw
+                <button
+                  onClick={() => onReanalyze(item.id)}
+                  disabled={item.analysisStatus === "loading"}
+                  className="flex items-center gap-1 rounded px-1 py-0.5 normal-case tracking-normal text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+                  title="Re-run analysis on this image (replaces your edits)"
+                >
+                  <RefreshCw
+                    size={10}
+                    className={item.analysisStatus === "loading" ? "animate-spin" : ""}
+                  />
+                  re-analyze
+                </button>
+              </span>
+              <textarea
+                value={item.analysis || ""}
+                onChange={(e) => onFieldChange(item.id, { analysis: e.target.value })}
+                placeholder="edit what the model saw — add anything it missed…"
+                className="block h-24 w-full resize-none rounded border border-slate-200 bg-white p-1.5 text-[10px] leading-snug text-slate-600 outline-none focus:border-slate-400"
+              />
+            </div>
+          )}
         </div>
       ) : (
         <img
@@ -1058,7 +1092,17 @@ function ImageItem({
           </span>
         )}
         {item.analysisStatus === "error" && (
-          <span className="text-rose-600">analysis failed</span>
+          <span className="flex items-center gap-1 text-rose-600">
+            analysis failed
+            <button
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => onReanalyze(item.id)}
+              className="rounded p-0.5 text-rose-500 hover:bg-rose-50 hover:text-rose-700"
+              title="Retry analysis"
+            >
+              <RefreshCw size={11} />
+            </button>
+          </span>
         )}
         <span className="ml-auto flex items-center gap-0.5">
           <button
@@ -1239,6 +1283,8 @@ export default function Mood() {
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [scale, setScale] = useState(1);
   const [panning, setPanning] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
+  const dragDepth = useRef(0);
 
   // ui state
   const [showNew, setShowNew] = useState(false);
@@ -1268,7 +1314,16 @@ export default function Mood() {
   const lastSig = useRef({}); // boardId -> signature of last generated content
   const genToken = useRef({}); // boardId -> async token
   const timers = useRef({}); // boardId -> debounce timer
-  const zRef = useRef(10);
+  // Start the z counter above any persisted item so newly dragged cards
+  // always come to the front after a reload.
+  const [initialZ] = useState(() =>
+    Math.max(
+      10,
+      ...initialState.boards.flatMap((b) => (b.items || []).map((it) => it.z || 0))
+    )
+  );
+  const zRef = useRef(initialZ);
+  const toastTimer = useRef(null);
   const configRef = useRef(config);
 
   useEffect(() => void (boardsRef.current = boards), [boards]);
@@ -1307,11 +1362,29 @@ export default function Mood() {
     }
   }, []);
 
+  // Escape closes the topmost open modal.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      if (showSettings) setShowSettings(false);
+      else if (showHistory) setShowHistory(false);
+      else if (showLibrary) setShowLibrary(false);
+      else if (showNew) setShowNew(false);
+      else if (showOnboarding) dismissOnboarding();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showSettings, showHistory, showLibrary, showNew, showOnboarding, dismissOnboarding]);
+
+  const anyModalOpen =
+    showSettings || showHistory || showLibrary || showNew || showOnboarding;
+
   const activeBoard = boards.find((b) => b.id === activeId) || null;
 
   const flash = useCallback((msg) => {
     setToast(msg);
-    setTimeout(() => setToast(""), 2600);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(""), 2600);
   }, []);
 
   const testConnection = useCallback(async () => {
@@ -1462,6 +1535,7 @@ export default function Mood() {
             dimensionWeights: r.dimensionWeights,
             positive: r.positive || "",
             negative: r.negative || "",
+            analysis: r.analysis || "",
           }))
         );
       } catch (e) {
@@ -1521,7 +1595,7 @@ export default function Mood() {
               (r) =>
                 `${r.id}:${formatImageWeight(r.weight)}:${formatDimensionWeights(
                   r.dimensionWeights
-                )}:p${r.positive || ""}:n${r.negative || ""}`
+                )}:p${r.positive || ""}:n${r.negative || ""}:a${r.analysis || ""}`
             )
             .join("|");
         if (lastSig.current[board.id] !== sig) {
@@ -1584,7 +1658,7 @@ export default function Mood() {
             (r) =>
               `${r.id}:${formatImageWeight(r.weight)}:${formatDimensionWeights(
                 r.dimensionWeights
-              )}:p${r.positive || ""}:n${r.negative || ""}`
+              )}:p${r.positive || ""}:n${r.negative || ""}:a${r.analysis || ""}`
           )
           .join("|");
       setOutput(b.id, "loading", b.output);
@@ -1710,6 +1784,29 @@ export default function Mood() {
     [updateItem]
   );
 
+  // Re-run analysis on a single image — recovers failed analyses and picks
+  // up analysis-prompt improvements without re-dropping the file.
+  const handleReanalyze = useCallback(
+    async (itemId) => {
+      const boardId = activeIdRef.current;
+      const board = boardsRef.current.find((b) => b.id === boardId);
+      const item = board?.items.find((it) => it.id === itemId);
+      if (!board || !item?.src || item.analysisStatus === "loading") return;
+      updateItem(boardId, itemId, { analysisStatus: "loading", analysisError: "" });
+      try {
+        const analysis = await analyzeImage(configRef.current, item.src);
+        updateItem(boardId, itemId, { analysis, analysisStatus: "ready" });
+      } catch (e) {
+        updateItem(boardId, itemId, {
+          analysisStatus: "error",
+          analysisError: e.message,
+        });
+        flash("Image analysis failed — check API access.");
+      }
+    },
+    [updateItem, flash]
+  );
+
   const handleNoteChange = useCallback(
     (itemId, content) => {
       if (!activeIdRef.current) return;
@@ -1728,6 +1825,27 @@ export default function Mood() {
     };
   }, []);
 
+  // Paste images from the clipboard straight onto the active image board.
+  useEffect(() => {
+    const onPaste = (e) => {
+      if (anyModalOpen) return;
+      const tag = e.target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      const board = boardsRef.current.find((b) => b.id === activeIdRef.current);
+      if (!board || board.type !== "image") return;
+      const files = Array.from(e.clipboardData?.files || []).filter((f) =>
+        f.type.startsWith("image/")
+      );
+      if (!files.length) return;
+      e.preventDefault();
+      const c = centerWorld();
+      files.forEach((f, i) => addImage(board.id, f, c.x + i * 26, c.y + i * 26));
+      flash(`Pasted ${files.length} image${files.length > 1 ? "s" : ""}.`);
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [anyModalOpen, addImage, centerWorld, flash]);
+
   /* ----------------------- drag & drop in ----------------------- */
 
   const worldPointFromEvent = useCallback((clientX, clientY) => {
@@ -1741,6 +1859,8 @@ export default function Mood() {
   const onDrop = useCallback(
     async (e) => {
       e.preventDefault();
+      dragDepth.current = 0;
+      setDropActive(false);
       const board = boardsRef.current.find((b) => b.id === activeIdRef.current);
       if (!board) return;
       const p = worldPointFromEvent(e.clientX, e.clientY);
@@ -1886,6 +2006,38 @@ export default function Mood() {
   const resetView = () => {
     setScale(1);
     setPan({ x: 0, y: 0 });
+  };
+
+  // Zoom + pan so every item on the active board is visible.
+  const fitView = () => {
+    const el = viewportRef.current;
+    const board = boardsRef.current.find((b) => b.id === activeIdRef.current);
+    const items = board?.items || [];
+    if (!el || !items.length) return resetView();
+    const CARD_W = 220;
+    const CARD_H = 280; // card width is fixed; height varies — close enough to frame
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    items.forEach((it) => {
+      minX = Math.min(minX, it.x);
+      minY = Math.min(minY, it.y);
+      maxX = Math.max(maxX, it.x + CARD_W);
+      maxY = Math.max(maxY, it.y + CARD_H);
+    });
+    const r = el.getBoundingClientRect();
+    const pad = 60;
+    const ns = clamp(
+      Math.min(r.width / (maxX - minX + pad * 2), r.height / (maxY - minY + pad * 2)),
+      0.2,
+      1.5
+    );
+    setScale(ns);
+    setPan({
+      x: (r.width - (maxX - minX) * ns) / 2 - minX * ns,
+      y: (r.height - (maxY - minY) * ns) / 2 - minY * ns,
+    });
   };
 
   /* ------------------------- board ops -------------------------- */
@@ -2145,6 +2297,9 @@ export default function Mood() {
                     {b.name}
                   </button>
                 )}
+                <span className="shrink-0 font-mono text-[10px] text-slate-400 group-hover:hidden">
+                  {(b.items || []).filter((it) => it.kind === "image").length}
+                </span>
                 <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
                   <button
                     onClick={() => {
@@ -2205,7 +2360,7 @@ export default function Mood() {
               <button onClick={() => zoomBy(1 / 1.2)} className="rounded p-1 hover:bg-slate-100" title="Zoom out">
                 <ZoomOut size={14} />
               </button>
-              <button onClick={resetView} className="rounded p-1 hover:bg-slate-100" title="Reset view">
+              <button onClick={fitView} className="rounded p-1 hover:bg-slate-100" title="Fit all items in view">
                 <Maximize2 size={14} />
               </button>
             </div>
@@ -2224,6 +2379,17 @@ export default function Mood() {
             ref={viewportRef}
             onMouseDown={activeBoard ? startPan : undefined}
             onDragOver={(e) => e.preventDefault()}
+            onDragEnter={(e) => {
+              e.preventDefault();
+              if (!activeBoard) return;
+              if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+              dragDepth.current += 1;
+              setDropActive(true);
+            }}
+            onDragLeave={() => {
+              dragDepth.current = Math.max(0, dragDepth.current - 1);
+              if (dragDepth.current === 0) setDropActive(false);
+            }}
             onDrop={onDrop}
             className={`absolute inset-0 ${
               panning ? "cursor-grabbing" : activeBoard ? "cursor-grab" : ""
@@ -2289,6 +2455,7 @@ export default function Mood() {
                         onDimensionWeightChange={handleDimensionWeightChange}
                         onFieldChange={handleImageFieldChange}
                         onToggleDisabled={handleToggleDisabled}
+                        onReanalyze={handleReanalyze}
                       />
                     ) : (
                       <NoteItem
@@ -2304,6 +2471,14 @@ export default function Mood() {
               </>
             )}
           </div>
+
+          {dropActive && activeBoard && (
+            <div className="pointer-events-none absolute inset-2 z-20 flex items-center justify-center rounded-lg border-2 border-dashed border-slate-500/60 bg-slate-900/5">
+              <span className="rounded-md bg-slate-900/85 px-3 py-1.5 text-xs font-medium text-white shadow-lg">
+                Drop to add to “{activeBoard.name}”
+              </span>
+            </div>
+          )}
 
           {toast && (
             <div className="absolute bottom-4 left-1/2 z-30 -translate-x-1/2 rounded bg-slate-800 px-3 py-1.5 text-xs text-white shadow-lg">
@@ -2825,8 +3000,9 @@ function SettingsModal({
 
           {p === "anthropic" && (
             <div className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
-              Uses the built-in Claude API — no key required. This is the only
-              provider guaranteed to work inside the Claude.ai artifact preview.
+              Uses the built-in Claude API — no key required. Only available
+              when mood runs inside Claude.ai; in the desktop app use a local
+              or API-key provider instead.
             </div>
           )}
 
