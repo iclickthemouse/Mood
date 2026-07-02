@@ -573,16 +573,17 @@ async function errText(res) {
 
 const IMAGE_ANALYSIS_SYSTEM = `You analyze a single reference image for a visual mood board.
 
-Return 4-8 sentences of plain text (no preamble, no headings, no markdown, no bullet lists). Cover every applicable dimension below. Be specific, concrete, and evocative.
+Return one flowing plain-text passage (no preamble, no headings, no markdown, no bullet lists). Use as many sentences as the image genuinely needs — a dense poster full of text deserves far more coverage than a simple texture study. Cover every applicable dimension below. Be specific, concrete, and evocative; do not pad with filler once the image is fully described.
 
-1. TYPOGRAPHY / TEXT — this is the highest-priority check. If ANY text, lettering, numbers, logos, watermarks, or typographic elements appear in the image:
+1. TYPOGRAPHY / TEXT — never skip this check. If ANY text, lettering, numbers, logos, watermarks, or typographic elements appear in the image:
    • Transcribe every word EXACTLY as written, preserving spelling, capitalization, punctuation, and line breaks. Wrap each transcription in quotation marks.
    • Describe the typeface style (serif, sans-serif, script, display, hand-lettered, 3D extruded, neon, etc.), weight (bold, light, condensed), color, size relative to the frame, placement/position, and any effects (drop shadow, outline, glow, distortion, perspective warp).
    • If there is NO visible text, do not mention typography at all — do not guess or hallucinate text.
 
 2. CULTURAL & STYLE REFERENCES — identify recognizable visual lineages:
-   • Name the specific franchise, film, show, game, artist, studio, movement, or brand the image evokes (e.g. "Pixar Finding Nemo style 3D animation", "Studio Ghibli watercolor", "Shepard Fairey OBEY screenprint aesthetic"). Be precise — "3D animation" alone is not enough when a specific reference is identifiable.
+   • If — and only if — the image clearly evokes a specific franchise, film, show, game, artist, studio, movement, or brand, name it precisely; a generic label like "3D animation" is not enough when a specific reference is identifiable.
    • Note recognizable characters, mascots, parodies, or homages and name them.
+   • Never force a reference. If nothing specific is identifiable, describe the style in plain visual terms instead of guessing.
 
 3. SUBJECT & CHARACTER — describe the primary subject(s): species/type, pose, expression, costume/accessories, distinguishing features. If the subject is a known or identifiable character (real or fictional), name them.
 
@@ -598,7 +599,7 @@ Return 4-8 sentences of plain text (no preamble, no headings, no markdown, no bu
 
 9. MEDIUM & RENDER STYLE — 3D render, photograph, illustration, oil paint, vector, mixed media, pixel art, etc. Note the fidelity level and finish quality.
 
-Order your sentences so typography and cultural references come first (when present), then subject, then remaining dimensions. Fuse naturally — do not use numbers or labels in the output.`;
+Every applicable dimension must be covered — order does not matter, completeness does. Fuse naturally — do not use numbers or labels in the output.`;
 
 const IMAGE_SYNTH_SYSTEM = `You are the mood image distillation agent. You synthesize one image board into one precise image-generation prompt.
 
@@ -648,12 +649,13 @@ Named subject preservation:
 
 Typography preservation:
 - If any analysis contains quoted text transcriptions (words the model read from the image), those exact strings MUST appear verbatim in the final prompt — preserve the original spelling, capitalization, and punctuation inside quotation marks.
-- Do not paraphrase, summarize, or genericize transcribed text. "FINDING STEVIE" must appear as "FINDING STEVIE", never as "bold stylized typography" or "text elements".
+- Do not paraphrase, summarize, or genericize transcribed text. The exact quoted words from the analysis must appear unchanged — never replace them with vague stand-ins like "bold stylized typography" or "text elements".
 - Include the typeface style, placement, and visual treatment described in the analysis alongside the verbatim text.
 - If multiple references contain different text, include all of them with their described visual treatments.
 
 Cultural and style reference preservation:
-- If an analysis identifies a specific franchise, studio, artist, movement, or brand reference (e.g. "Pixar Finding Nemo style"), preserve that attribution in the final prompt. Do not dilute "Pixar Finding Nemo style 3D animation" into just "3D animation" or "animated style".
+- If an analysis identifies a specific franchise, studio, artist, movement, or brand reference, preserve that exact attribution in the final prompt. Do not dilute a named reference into a generic label like "3D animation" or "animated style".
+- Only carry references that appear in the analyses — never introduce a franchise, studio, or artist the analyses do not mention.
 - Named cultural references are compositional anchors — they communicate more visual information in fewer words than generic descriptions.
 
 Always fuse the board into one coherent result. Never list images separately. Never say moodboard, reference image, image 1, image 2, based on the board, or inspired by these images. Avoid generic hype language such as beautiful, stunning, masterpiece, ultra detailed, award winning, and trending. Use concrete visual language: subject, composition, viewpoint, light, palette, texture, atmosphere, medium, finish, and avoidances.
@@ -731,7 +733,9 @@ async function analyzeImage(cfg, dataUrl) {
     system: IMAGE_ANALYSIS_SYSTEM,
     text: "Analyze this reference image for a mood board.",
     images: [dataUrl],
-    maxTokens: 1200,
+    // No sentence cap in the prompt — give dense images (posters, layouts)
+    // room to be fully transcribed and described.
+    maxTokens: 2000,
   });
 }
 
