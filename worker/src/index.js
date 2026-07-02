@@ -177,26 +177,37 @@ async function generate(request, env, cors) {
   if (system) payload.systemInstruction = { parts: [{ text: system }] };
 
   const model = env.GEMINI_MODEL || "gemini-2.5-flash-lite";
-  const upstream = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        // Key travels only in this server-to-server header, never in a URL
-        // (URLs can end up in logs) and never back to the client.
-        "x-goog-api-key": env.GEMINI_API_KEY,
-      },
-      body: JSON.stringify(payload),
-    }
-  );
+  // Gemini intermittently returns 429/500/503 under load; these usually
+  // clear within a second, so absorb them with a couple of retries instead
+  // of surfacing every blip to the user.
+  let upstream;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 600 * attempt));
+    upstream = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          // Key travels only in this server-to-server header, never in a URL
+          // (URLs can end up in logs) and never back to the client.
+          "x-goog-api-key": env.GEMINI_API_KEY,
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+    if (upstream.ok || ![429, 500, 503].includes(upstream.status)) break;
+    console.error("gemini retryable", upstream.status, `attempt ${attempt + 1}`);
+  }
 
   if (!upstream.ok) {
     // Surface the status but not the upstream body — it can contain
     // request echoes we don't want to hand to clients.
     console.error("gemini upstream", upstream.status, await upstream.text());
     return json(
-      { error: `Model temporarily unavailable (${upstream.status})` },
+      {
+        error: `The model is briefly overloaded (${upstream.status}) — try again in a few seconds.`,
+      },
       502,
       cors
     );
