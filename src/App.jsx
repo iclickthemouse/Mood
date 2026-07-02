@@ -915,6 +915,12 @@ Scene integrity:
 - Props and held objects (weapons, drinks, devices, branded products) stay attached to the subject holding them, with the same framing relationship the analyses describe.
 - Never invent avoidances. Negative direction may only contain failure modes consistent with the analyses and user-provided negatives. If the board contains a person, "avoid human elements" is a contradiction, not a valid negative.
 
+Board coverage — weight decides how much, never whether:
+- Every reference must leave at least one visible fingerprint in the final prompt: a subject trait, style cue, palette note, material or texture, typographic treatment, compositional idea, or mood accent. A reference with low weight contributes less, but never nothing.
+- When a reference's literal subject cannot coexist with the scene the anchors define, do not drop it — translate it. Carry its abstract qualities (palette, finish, texture, humor, typographic voice, graphic language) into the direction instead.
+- Typography and logos are content, not decoration: if any analysis transcribes text or identifies a logo, mark, or brand treatment, it must surface in the final prompt unless a user negative excludes it. Never claim no typography exists when an analysis contains some.
+- Before returning, run a coverage pass: for each reference, confirm at least one concrete element in the output traces back to it. If any reference contributed nothing, revise the output before returning.
+
 Cultural and style reference preservation:
 - If an analysis identifies a specific franchise, studio, artist, movement, or brand reference, preserve that exact attribution in the final prompt. Do not dilute a named reference into a generic label like "3D animation" or "animated style".
 - Only carry references that appear in the analyses — never introduce a franchise, studio, or artist the analyses do not mention.
@@ -973,6 +979,94 @@ Avoid these words and phrases in all sections: cinematic masterpiece, hyper real
 
 Before returning, check that the output has no placeholders, no unresolved notes, no hidden analysis commentary, and no unsupported format.`;
 
+/* Remix kit — decomposes the board's fused direction into isolated,
+ * subject-agnostic "lenses" the user can apply to entirely new subjects.
+ * This is the board-as-vocabulary output, distinct from the board-as-scene
+ * output the synthesis prompt produces.                                    */
+const REMIX_SYSTEM = `You are the Mood Director remix agent. A user has a mood board of analyzed reference images. Your job is NOT to describe one image or scene — it is to decompose the board's collective visual DNA into isolated, reusable prompt layers ("lenses") the user can apply to entirely new subjects of their own.
+
+Rules:
+- Each lens must stand alone as model-ready prompt language — concrete, visual, specific. No meta commentary, no references to "the board", "the images", or "the references".
+- Lenses are subject-agnostic: the board's literal subjects may appear only in SUBJECT ESSENCE. Everywhere else, where the user's own content belongs, write the placeholder [SUBJECT], [SETTING], or [TEXT].
+- Weights scale vocabulary share: higher-weight references shape every lens more strongly, but every reference contributes at least one distinctive trait somewhere in the kit.
+- Fuse across images into one shared language. Where references genuinely diverge, offer the tension as alternatives ("polished chrome or mud-caked iron") rather than dropping one side.
+- If any analysis transcribes text or identifies a logo or brand treatment, capture its typographic voice in TYPOGRAPHY LENS (exact strings in quotes plus treatment).
+- Avoid hype words: beautiful, stunning, masterpiece, ultra detailed, award winning, breathtaking, cinematic masterpiece.
+
+Return plain text with exactly these labeled sections, each 1-4 sentences of dense prompt language:
+
+SUBJECT ESSENCE: The board's subject archetypes and their defining traits, written as transferable character/subject vocabulary.
+
+STYLE LENS: Medium, render or photographic finish, era, graphic language — phrased so it can restyle any [SUBJECT].
+
+PALETTE LENS: Named colors, temperature, saturation, contrast behavior, where accents land.
+
+LIGHTING LENS: Source direction, quality, color temperature, shadow behavior, signature effects (glints, glow, haze, caustics).
+
+COMPOSITION LENS: Framing, camera feel, subject placement, negative space, depth — written around [SUBJECT].
+
+TEXTURE & MATERIAL LENS: Surfaces, materials, wear and condition, tactile contrasts.
+
+MOOD LENS: Emotional temperature, energy, narrative tension — the atmosphere vocabulary of the board.
+
+TYPOGRAPHY LENS: Exact transcribed text or logo treatments in quotes with their visual voice, or the single line "No typography on this board."
+
+AVOID: What would break this aesthetic — concrete failure modes drawn from the board's character, comma-separated.
+
+TEMPLATE: One fill-in-the-blank master prompt that assembles the lenses around [SUBJECT] (and [SETTING] / [TEXT] where useful), ready to paste into an image model.
+
+Before returning, check every section label is present, spelled exactly as above, and that no section leaks the board's literal subject outside SUBJECT ESSENCE.`;
+
+const REMIX_LENSES = [
+  { key: "all", label: "All layers" },
+  { key: "SUBJECT ESSENCE", label: "Subject essence" },
+  { key: "STYLE LENS", label: "Style" },
+  { key: "PALETTE LENS", label: "Palette" },
+  { key: "LIGHTING LENS", label: "Lighting" },
+  { key: "COMPOSITION LENS", label: "Composition" },
+  { key: "TEXTURE & MATERIAL LENS", label: "Texture & material" },
+  { key: "MOOD LENS", label: "Mood" },
+  { key: "TYPOGRAPHY LENS", label: "Typography" },
+  { key: "AVOID", label: "Avoid" },
+  { key: "TEMPLATE", label: "Template" },
+];
+
+// Pull one labeled lens section out of the remix-kit text.
+function extractRemixLens(kit, key) {
+  if (!kit) return "";
+  if (key === "all") return kit.trim();
+  const labels = REMIX_LENSES.filter((l) => l.key !== "all").map((l) => l.key);
+  const pattern = new RegExp(
+    `^${key.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\s*:\\s*([\\s\\S]*?)(?=^(?:${labels
+      .map((l) => l.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&"))
+      .join("|")})\\s*:|$)`,
+    "m"
+  );
+  const m = pattern.exec(kit);
+  return m ? m[1].trim() : "";
+}
+
+async function generateRemixKit(cfg, references) {
+  const normalized = references
+    .map((ref, i) => ({
+      index: i + 1,
+      source_id: ref.id || `reference-${i + 1}`,
+      weight: clampImageWeight(ref.weight),
+      dimension_weights: normalizeDimensionWeights(ref.dimensionWeights),
+      positive: (ref.positive || "").trim(),
+      negative: (ref.negative || "").trim(),
+      analysis: ref.analysis || "",
+    }))
+    .filter((r) => r.analysis.trim());
+  return runCompletion(cfg, {
+    system: REMIX_SYSTEM,
+    text:
+      `Decompose this board of ${normalized.length} weighted reference(s) into the remix kit sections.\n\n` +
+      JSON.stringify({ references: normalized }, null, 2),
+    maxTokens: 2000,
+  });
+}
+
 const SKILL_SYSTEM = `You reverse-engineer a writer's style into a reusable skill.md file. You are given multiple writing samples from a single voice. Produce ONE cohesive style guide in GitHub-flavored Markdown that another writer or AI could follow to reliably reproduce this voice. Synthesize ACROSS all samples — do not summarize each sample separately.
 
 Use exactly these sections:
@@ -999,6 +1093,30 @@ async function analyzeImage(cfg, dataUrl) {
     // room to be fully transcribed and described.
     maxTokens: 2000,
   });
+}
+
+// The image items on a board that are ready to feed synthesis.
+function readyImageRefs(board) {
+  return (board?.items || []).filter(
+    (it) =>
+      it.kind === "image" &&
+      it.analysisStatus === "ready" &&
+      it.analysis &&
+      !it.disabled
+  );
+}
+
+// Content signature for a board's synthesis inputs (weights, focus fields,
+// analyses) — used to detect when derived outputs are stale.
+function imageContentSig(refs) {
+  return refs
+    .map(
+      (r) =>
+        `${r.id}:${formatImageWeight(r.weight)}:${formatDimensionWeights(
+          r.dimensionWeights
+        )}:p${r.positive || ""}:n${r.negative || ""}:a${r.analysis || ""}`
+    )
+    .join("|");
 }
 
 async function synthesizeImagePrompt(
@@ -2103,6 +2221,36 @@ function Mood({ initialState }) {
     }
   }, [setOutput, runImageSynth, runSkill]);
 
+  // Build (or rebuild) the remix kit — the board's DNA decomposed into
+  // reusable, subject-agnostic prompt lenses.
+  const handleBuildRemix = useCallback(async () => {
+    const b = boardsRef.current.find((x) => x.id === activeIdRef.current);
+    if (!b || b.type !== "image" || b.remixStatus === "loading") return;
+    const ready = readyImageRefs(b);
+    if (!ready.length) return;
+    const sig = imageContentSig(ready);
+    patchBoard(b.id, { remixStatus: "loading", remixError: "" });
+    try {
+      const kit = await generateRemixKit(
+        configRef.current,
+        ready.map((r) => ({
+          id: r.id,
+          weight: clampImageWeight(r.weight),
+          dimensionWeights: normalizeDimensionWeights(r.dimensionWeights),
+          positive: r.positive || "",
+          negative: r.negative || "",
+          analysis: r.analysis,
+        }))
+      );
+      patchBoard(b.id, { remix: kit, remixStatus: "ready", remixSig: sig });
+    } catch (e) {
+      patchBoard(b.id, {
+        remixStatus: "error",
+        remixError: e.message || "Remix kit generation failed",
+      });
+    }
+  }, [patchBoard]);
+
   /* ------------------------- add content ------------------------- */
 
   const addImage = useCallback(
@@ -3074,6 +3222,17 @@ function Mood({ initialState }) {
                 activeCount={activeImageCount}
               />
             )}
+
+            {activeBoard &&
+              activeBoard.type === "image" &&
+              activeBoard.outputStatus === "ready" &&
+              activeBoard.output && (
+                <RemixKit
+                  board={activeBoard}
+                  onBuild={handleBuildRemix}
+                  flash={flash}
+                />
+              )}
 
             {activeBoard && activeBoard.type === "text" && (
               <TextOutput board={activeBoard} noteCount={noteCount} />
@@ -4229,6 +4388,122 @@ function ImageOutput({ board, analyzing, count, activeCount }) {
       <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-slate-800">
         {board.output}
       </p>
+    </div>
+  );
+}
+
+/* Remix kit panel — turns the board from a scene description into a
+ * vocabulary: isolated lenses (style, palette, lighting, …) with [SUBJECT]
+ * placeholders, ready to point at the user's own subjects. */
+function RemixKit({ board, onBuild, flash }) {
+  const [lens, setLens] = useState("all");
+  const stale =
+    board.remixStatus === "ready" &&
+    board.remixSig !== imageContentSig(readyImageRefs(board));
+  const fragment = extractRemixLens(board.remix, lens);
+
+  const copyFragment = () => {
+    if (!fragment) return;
+    navigator.clipboard?.writeText(fragment).then(
+      () =>
+        flash(
+          lens === "all"
+            ? "Remix kit copied."
+            : `${REMIX_LENSES.find((l) => l.key === lens)?.label} lens copied.`
+        ),
+      () => flash("Copy failed.")
+    );
+  };
+
+  return (
+    <div className="mt-4 border-t border-slate-200 pt-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <SlidersHorizontal size={12} /> Remix kit
+          {stale && (
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-medium normal-case tracking-normal text-amber-700">
+              board changed — rebuild
+            </span>
+          )}
+        </span>
+        {board.remixStatus === "ready" && (
+          <button
+            onClick={onBuild}
+            className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            title="Rebuild remix kit"
+          >
+            <RefreshCw size={13} />
+          </button>
+        )}
+      </div>
+
+      {(!board.remixStatus || board.remixStatus === "idle") && (
+        <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-3">
+          <p className="text-[12px] leading-relaxed text-slate-500">
+            Split this board into reusable lenses — style, palette, lighting,
+            composition — with{" "}
+            <code className="rounded bg-slate-200 px-1 text-[10px]">
+              [SUBJECT]
+            </code>{" "}
+            slots, so you can apply the board's look to anything you want to
+            make next.
+          </p>
+          <button
+            onClick={onBuild}
+            className="mt-2 flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
+          >
+            <SlidersHorizontal size={12} /> Build remix kit
+          </button>
+        </div>
+      )}
+
+      {board.remixStatus === "loading" && (
+        <div className="flex items-center gap-2 py-2 text-sm text-slate-500">
+          <Loader2 size={14} className="animate-spin text-indigo-500" />
+          Decomposing the board into lenses…
+        </div>
+      )}
+
+      {board.remixStatus === "error" && (
+        <div className="rounded-md bg-rose-50 p-2.5 text-xs text-rose-700">
+          {board.remixError || "Remix kit generation failed."}
+          <button
+            onClick={onBuild}
+            className="ml-2 font-medium underline hover:no-underline"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {board.remixStatus === "ready" && board.remix && (
+        <div>
+          <div className="mb-2 flex items-center gap-1.5">
+            <select
+              value={lens}
+              onChange={(e) => setLens(e.target.value)}
+              className="min-w-0 flex-1 rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px] text-slate-600 outline-none focus:border-indigo-400"
+            >
+              {REMIX_LENSES.map((l) => (
+                <option key={l.key} value={l.key}>
+                  {l.label}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={copyFragment}
+              disabled={!fragment}
+              className="flex items-center gap-1 rounded border border-slate-200 px-2 py-1 text-[11px] text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+              title="Copy this lens"
+            >
+              <Copy size={11} /> Copy
+            </button>
+          </div>
+          <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-2.5 font-mono text-[11px] leading-relaxed text-slate-700">
+            {fragment || "This lens came back empty — rebuild the kit."}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }
