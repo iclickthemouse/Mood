@@ -1,0 +1,30 @@
+# mood hosted-model proxy — Cloudflare Worker.
+#
+# One-time setup:
+#   cd worker
+#   npx wrangler kv namespace create RATE        # paste the id below
+#   npx wrangler secret put GEMINI_API_KEY       # your Gemini key (never in code)
+#   npx wrangler secret put BETA_PASSWORD        # the entry password for testers
+#   npx wrangler secret put TOKEN_SECRET         # any long random string (signs tokens)
+#   npx wrangler deploy
+#
+# Secrets are encrypted at rest by Cloudflare and are only decrypted inside
+# the running worker. They never appear in this repo, the frontend bundle,
+# API responses, or `wrangler.toml`.
+
+name = "mood-proxy"
+main = "src/index.js"
+compatibility_date = "2026-06-01"
+
+[[kv_namespaces]]
+binding = "RATE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+# Comma-separated list of origins allowed to call this worker.
+ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173"
+# Per-user limits (requests). Tune freely without redeploying secrets.
+LIMIT_PER_MINUTE = "10"
+LIMIT_PER_DAY = "150"
+# Model is pinned server-side so clients can't pick an expensive one.
+GEMINI_MODEL = "gemini-2.5-flash-lite"

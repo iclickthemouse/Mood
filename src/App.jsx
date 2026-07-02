@@ -174,17 +174,42 @@ const PROVIDERS = {
 const BYO_PROVIDERS = ["lmstudio", "ollama", "openai", "gemini", "anthropic"];
 
 /* mood hosted — a vision model we run for the user (zero setup).
- * Currently Gemini 2.5 Flash-Lite ($0.10/M in, $0.40/M out — a full board
- * synthesis costs well under a cent). During beta the key is baked in at
- * build time via VITE_MOOD_HOSTED_KEY; later this moves behind a proxy
- * with real accounts (see docs/MONETIZATION.md phase 2).                 */
-const HOSTED_MODEL = "gemini-2.5-flash-lite";
-const HOSTED_KEY = import.meta.env.VITE_MOOD_HOSTED_KEY || "";
-const HOSTED_AVAILABLE = !!HOSTED_KEY;
+ * All hosted calls go through the mood proxy worker (worker/), which owns
+ * the model API key server-side; the key never exists in this bundle.
+ * Entry requires the beta password, exchanged for a signed 30-day token.
+ * VITE_MOOD_PROXY_URL points at the deployed worker (unset = no hosted). */
+const HOSTED_PROXY_URL = (import.meta.env.VITE_MOOD_PROXY_URL || "").replace(
+  /\/+$/,
+  ""
+);
+const HOSTED_AVAILABLE = !!HOSTED_PROXY_URL;
+const HOSTED_TOKEN_KEY = "mood.hosted.token";
+
+function getHostedToken() {
+  if (typeof window === "undefined") return "";
+  const token = window.localStorage.getItem(HOSTED_TOKEN_KEY) || "";
+  const exp = Number(token.split(".")[1]);
+  if (!token || !Number.isFinite(exp) || exp < Date.now()) return "";
+  return token;
+}
+
+async function hostedLogin(password) {
+  const res = await appFetch(`${HOSTED_PROXY_URL}/api/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || "Wrong password");
+  }
+  const { token } = await res.json();
+  window.localStorage.setItem(HOSTED_TOKEN_KEY, token);
+  return token;
+}
 
 const DEFAULT_CONFIG = {
   provider: HOSTED_AVAILABLE ? "hosted" : "lmstudio",
-  hostedEmail: "",
   openaiKey: "",
   openaiModel: "gpt-4o-mini",
   geminiKey: "",
@@ -518,16 +543,39 @@ async function appFetch(input, init = {}) {
   }
 }
 
-function hostedComplete({ system, text, images, maxTokens }) {
+async function hostedComplete({ system, text, images, maxTokens }) {
   if (!HOSTED_AVAILABLE) {
     throw new Error(
       "The hosted model isn't configured in this build — pick a provider under 'Bring your own model' in settings."
     );
   }
-  return geminiComplete(
-    { geminiKey: HOSTED_KEY, geminiModel: HOSTED_MODEL },
-    { system, text, images, maxTokens }
-  );
+  const token = getHostedToken();
+  if (!token) {
+    throw new Error(
+      "Beta access needed — enter the beta password in settings to use the hosted model."
+    );
+  }
+  const res = await appFetch(`${HOSTED_PROXY_URL}/api/generate`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ system, text, images, maxTokens }),
+  });
+  if (res.status === 401) {
+    window.localStorage.removeItem(HOSTED_TOKEN_KEY);
+    throw new Error(
+      "Beta session expired — re-enter the beta password in settings."
+    );
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Hosted model error (${res.status})`);
+  }
+  const data = await res.json();
+  if (!data.text) throw new Error("Hosted model returned an empty response.");
+  return data.text;
 }
 
 // Unified entry point. `images` is an array of data-URLs (may be empty).
@@ -1534,10 +1582,70 @@ function NoteItem({ item, onStartDrag, onDelete, onChange }) {
 
 /* ---------------------------- app ------------------------------ */
 
+// Beta entry gate for the hosted web deployment: the whole app sits behind
+// the beta password until a valid signed token is present. Desktop builds
+// and builds without a proxy URL are unaffected.
+function BetaGate({ onUnlock }) {
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!password || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await hostedLogin(password);
+      onUnlock();
+    } catch (err) {
+      setError(err.message || "Could not sign in.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex h-screen w-screen items-center justify-center bg-[#ece9e2] p-4">
+      <form
+        onSubmit={submit}
+        className="mood-pop-in w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-xl"
+      >
+        <img src={moodLogo} alt="mood" className="mx-auto h-8 w-auto" />
+        <p className="mt-3 text-[10px] font-medium uppercase tracking-[0.34em] text-slate-400">
+          Private beta
+        </p>
+        <p className="mt-4 text-sm leading-relaxed text-slate-500">
+          mood is in closed testing. Enter the beta password to continue.
+        </p>
+        <input
+          type="password"
+          autoFocus
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Beta password"
+          className="mt-5 w-full rounded-md border border-slate-300 px-3 py-2 text-center text-sm outline-none focus:border-indigo-400"
+        />
+        {error && <p className="mt-2 text-xs text-rose-600">{error}</p>}
+        <button
+          type="submit"
+          disabled={!password || busy}
+          className="mt-4 flex w-full items-center justify-center gap-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
+        >
+          {busy ? <Loader2 size={15} className="animate-spin" /> : "Enter"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 // Async bootstrap: IndexedDB loads are async, so gate the app on the first
 // read (and the one-time localStorage → IndexedDB migration) finishing.
 export default function MoodApp() {
   const [initial, setInitial] = useState(null);
+  const [unlocked, setUnlocked] = useState(
+    () => !HOSTED_AVAILABLE || isTauri() || !!getHostedToken()
+  );
   useEffect(() => {
     let alive = true;
     loadPersistedStateAsync()
@@ -1547,6 +1655,7 @@ export default function MoodApp() {
       alive = false;
     };
   }, []);
+  if (!unlocked) return <BetaGate onUnlock={() => setUnlocked(true)} />;
   if (!initial) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-[#ece9e2]">
@@ -3532,6 +3641,78 @@ function TextField({ label, hint, value, onChange, type = "text", placeholder })
   );
 }
 
+// Beta password / session state inside the hosted provider card. On desktop
+// (no entry gate) this is also where the password gets entered.
+function HostedAccessControls({ active, onUseHosted }) {
+  const [hasToken, setHasToken] = useState(() => !!getHostedToken());
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const unlock = async () => {
+    if (!password || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await hostedLogin(password);
+      setHasToken(true);
+      setPassword("");
+    } catch (e) {
+      setError(e.message || "Could not sign in.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!hasToken) {
+    return (
+      <div className="mt-2.5">
+        <div className="flex items-center gap-2">
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && unlock()}
+            placeholder="Beta password"
+            className="min-w-0 flex-1 rounded border border-slate-300 px-2.5 py-1.5 text-sm outline-none focus:border-indigo-400"
+          />
+          <button
+            onClick={unlock}
+            disabled={!password || busy}
+            className="flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {busy ? <Loader2 size={14} className="animate-spin" /> : "Unlock"}
+          </button>
+        </div>
+        {error ? (
+          <p className="mt-1.5 text-[11px] text-rose-600">{error}</p>
+        ) : (
+          <p className="mt-1.5 text-[11px] text-slate-400">
+            Closed beta — the hosted model needs the beta password.
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2.5">
+      {active ? (
+        <p className="flex items-center gap-1.5 text-[11px] font-medium text-indigo-600">
+          <CheckCircle2 size={12} /> Active — beta access unlocked
+        </p>
+      ) : (
+        <button
+          onClick={onUseHosted}
+          className="w-full rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+        >
+          Use hosted model
+        </button>
+      )}
+    </div>
+  );
+}
+
 function SettingsModal({
   config,
   setCfg,
@@ -3605,30 +3786,10 @@ function SettingsModal({
               install, works immediately.
             </p>
             {HOSTED_AVAILABLE ? (
-              <>
-                <div className="mt-2.5">
-                  <TextField
-                    label="Email"
-                    value={config.hostedEmail}
-                    onChange={(v) => setCfg({ hostedEmail: v })}
-                    placeholder="you@example.com"
-                    hint="Accounts come later — everything is unlocked for now."
-                  />
-                </div>
-                {p !== "hosted" && (
-                  <button
-                    onClick={() => setCfg({ provider: "hosted" })}
-                    className="mt-1 w-full rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
-                  >
-                    Use hosted model
-                  </button>
-                )}
-                {p === "hosted" && (
-                  <p className="mt-1 flex items-center gap-1.5 text-[11px] font-medium text-indigo-600">
-                    <CheckCircle2 size={12} /> Active — using {HOSTED_MODEL}
-                  </p>
-                )}
-              </>
+              <HostedAccessControls
+                active={p === "hosted"}
+                onUseHosted={() => setCfg({ provider: "hosted" })}
+              />
             ) : (
               <p className="mt-2 rounded-md bg-amber-50 p-2 text-[11px] text-amber-800">
                 Not available in this build — use a provider below.
