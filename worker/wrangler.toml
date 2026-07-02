@@ -32,5 +32,10 @@ ALLOWED_ORIGINS = "https://moodirector.com,https://www.moodirector.com,https://m
 # Per-user limits (requests). Tune freely without redeploying secrets.
 LIMIT_PER_MINUTE = "10"
 LIMIT_PER_DAY = "150"
+# How many times the beta password can be redeemed (rotating the password
+# resets the count). Existing tokens keep working after the cap.
+LIMIT_PASSWORD_USES = "25"
+# Hard ceiling on total requests/day across ALL users (spend protection).
+LIMIT_GLOBAL_PER_DAY = "1000"
 # Model is pinned server-side so clients can't pick an expensive one.
 GEMINI_MODEL = "gemini-2.5-flash-lite"

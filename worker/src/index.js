@@ -57,6 +57,20 @@ async function login(request, env, cors) {
   ) {
     return json({ error: "Wrong password" }, 401, cors);
   }
+  // Cap how many times this password can be redeemed. The counter key is
+  // derived from the password itself, so rotating the password starts a
+  // fresh count. Existing tokens keep working after the cap is hit.
+  const maxUses = Number(env.LIMIT_PASSWORD_USES || 25);
+  const usesKey = `pw:${(await hmac(env.TOKEN_SECRET, env.BETA_PASSWORD)).slice(0, 16)}`;
+  const uses = Number((await env.RATE.get(usesKey)) || 0);
+  if (uses >= maxUses) {
+    return json(
+      { error: "The beta is full — this password has reached its invite limit." },
+      403,
+      cors
+    );
+  }
+  await env.RATE.put(usesKey, String(uses + 1));
   const uid = crypto.randomUUID();
   const exp = Date.now() + TOKEN_TTL_MS;
   const sig = await hmac(env.TOKEN_SECRET, `${uid}.${exp}`);
@@ -111,23 +125,37 @@ async function constantTimeEqual(a, b) {
 
 async function checkRateLimit(env, uid) {
   const now = new Date();
+  const day = now.toISOString().slice(0, 10);
   const minuteKey = `m:${uid}:${Math.floor(now.getTime() / 60000)}`;
-  const dayKey = `d:${uid}:${now.toISOString().slice(0, 10)}`;
-  const [minuteRaw, dayRaw] = await Promise.all([
+  const dayKey = `d:${uid}:${day}`;
+  const globalKey = `g:${day}`;
+  const [minuteRaw, dayRaw, globalRaw] = await Promise.all([
     env.RATE.get(minuteKey),
     env.RATE.get(dayKey),
+    env.RATE.get(globalKey),
   ]);
   const minuteCount = Number(minuteRaw || 0);
   const dayCount = Number(dayRaw || 0);
+  const globalCount = Number(globalRaw || 0);
   if (minuteCount >= Number(env.LIMIT_PER_MINUTE || 10)) {
     return { ok: false, error: "Rate limit: too many requests — wait a minute." };
   }
   if (dayCount >= Number(env.LIMIT_PER_DAY || 150)) {
     return { ok: false, error: "Daily limit reached — resets at midnight UTC." };
   }
+  // Spend ceiling across ALL users, whatever the per-user math adds up to.
+  if (globalCount >= Number(env.LIMIT_GLOBAL_PER_DAY || 1000)) {
+    return {
+      ok: false,
+      error: "The beta hit today's overall usage cap — back tomorrow.",
+    };
+  }
   await Promise.all([
     env.RATE.put(minuteKey, String(minuteCount + 1), { expirationTtl: 120 }),
     env.RATE.put(dayKey, String(dayCount + 1), { expirationTtl: 60 * 60 * 48 }),
+    env.RATE.put(globalKey, String(globalCount + 1), {
+      expirationTtl: 60 * 60 * 48,
+    }),
   ]);
   return { ok: true };
 }
