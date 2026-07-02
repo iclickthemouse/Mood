@@ -173,6 +173,14 @@ const PROVIDERS = {
 // Providers where the user supplies the compute (local server or API key).
 const BYO_PROVIDERS = ["lmstudio", "ollama", "openai", "gemini", "anthropic"];
 
+// On an https web deployment the browser blocks calls to http://localhost
+// (mixed content), so local-server providers can't work there. The desktop
+// build routes through native HTTP and is unaffected.
+const LOCAL_PROVIDERS_BLOCKED =
+  typeof window !== "undefined" &&
+  !isTauri() &&
+  window.location.protocol === "https:";
+
 /* mood hosted — a vision model we run for the user (zero setup).
  * All hosted calls go through the mood proxy worker (worker/), which owns
  * the model API key server-side; the key never exists in this bundle.
@@ -735,17 +743,22 @@ async function lmStudioComplete(cfg, { system, text, images = [], maxTokens }) {
 function extractLmStudioFinalContent(reasoning = "", system = "") {
   const text = reasoning.trim();
   if (!text) return "";
-  if (/verbose_flux_caption/i.test(system) && /PROMPT\s*:/.test(text)) {
+  // The synthesis system prompt carries a single "Selected output format:"
+  // marker (buildImageSynthSystem). Testing the system for bare format names
+  // was a bug: it used to contain every format's spec, so the first branch
+  // always matched regardless of the actual selected format.
+  const fmt = (/Selected output format:\s*([a-z_]+)/i.exec(system) || [])[1] || "";
+  if (fmt === "verbose_flux_caption" && /PROMPT\s*:/.test(text)) {
     return extractFromMarker(text, /PROMPT\s*:/i);
   }
-  if (/deep_director/i.test(system) && /STYLE NAME\s*:/i.test(text)) {
+  if (fmt === "deep_director" && /STYLE NAME\s*:/i.test(text)) {
     return extractFromMarker(text, /STYLE NAME\s*:/i);
   }
-  if (/midjourney_tags/i.test(system)) {
+  if (fmt === "midjourney_tags") {
     const midjourneyMatch = /\/imagine prompt:[\s\S]+/i.exec(text);
     if (midjourneyMatch) return midjourneyMatch[0].trim();
   }
-  if (/(json|ideogram_json)/i.test(system)) {
+  if (fmt === "json" || fmt === "ideogram_json") {
     const jsonStart = text.indexOf("{");
     const jsonEnd = text.lastIndexOf("}");
     if (jsonStart >= 0 && jsonEnd > jsonStart) return text.slice(jsonStart, jsonEnd + 1).trim();
@@ -929,22 +942,22 @@ Cultural and style reference preservation:
 
 Always fuse the board into one coherent result. Never list images separately. Never say moodboard, reference image, image 1, image 2, based on the board, or inspired by these images. Avoid generic hype language such as beautiful, stunning, masterpiece, ultra detailed, award winning, and trending. Use concrete visual language: subject, composition, viewpoint, light, palette, texture, atmosphere, medium, finish, and avoidances.
 
-Return exactly the selected format.
+Return exactly the selected output format specified below — never any other format.`;
 
-json:
-Return valid JSON only with keys in this order: schema, format, visual_thesis, prompt, visual_dna, reference_fusion, negative_prompt, generation_hints, quality_checks. Use schema "mood.image_prompt.v1" and format "json". Include prompt.primary, prompt.short, and prompt.expanded. In reference_fusion include anchor_details, supporting_details, outlier_handling, conflicts_resolved, and weighting_decisions.
+/* One spec per output format. Only the SELECTED format's spec is sent with a
+ * request (see buildImageSynthSystem) — sending all specs at once caused
+ * models to blend formats, e.g. returning the JSON structure with Deep
+ * Director section names inside it.                                        */
+const IMAGE_SYNTH_FORMAT_SPECS = {
+  json: `Return valid JSON only with keys in this order: schema, format, visual_thesis, prompt, visual_dna, reference_fusion, negative_prompt, generation_hints, quality_checks. Use schema "mood.image_prompt.v1" and format "json". Include prompt.primary, prompt.short, and prompt.expanded. In reference_fusion include anchor_details, supporting_details, outlier_handling, conflicts_resolved, and weighting_decisions.`,
 
-verbose_flux_caption:
-Return plain text only with these exact sections: PROMPT, NEGATIVE PROMPT, STYLE KEYWORDS, PARAMETER NOTES. PROMPT must be one dense caption of 120-260 words. NEGATIVE PROMPT must be one comma-separated line of useful avoidances. STYLE KEYWORDS must be 12-32 comma-separated keywords. PARAMETER NOTES must be 2-5 short notes.
+  verbose_flux_caption: `Return plain text only with these exact sections: PROMPT, NEGATIVE PROMPT, STYLE KEYWORDS, PARAMETER NOTES. PROMPT must be one dense caption of 120-260 words. NEGATIVE PROMPT must be one comma-separated line of useful avoidances. STYLE KEYWORDS must be 12-32 comma-separated keywords. PARAMETER NOTES must be 2-5 short notes.`,
 
-ideogram_json:
-Return valid JSON only with keys in this order: high_level_description, style_description, compositional_deconstruction. For photo outputs, style_description key order is aesthetics, lighting, photo, medium, color_palette. For non-photo outputs, style_description key order is aesthetics, lighting, medium, art_style, color_palette. compositional_deconstruction key order is background, elements. Elements use type "obj" or "text". Use bbox arrays as [y_min, x_min, y_max, x_max] on a 0-1000 canvas when placement matters. Hex colors must be uppercase #RRGGBB.
+  ideogram_json: `Return valid JSON only with keys in this order: high_level_description, style_description, compositional_deconstruction. For photo outputs, style_description key order is aesthetics, lighting, photo, medium, color_palette. For non-photo outputs, style_description key order is aesthetics, lighting, medium, art_style, color_palette. compositional_deconstruction key order is background, elements. Elements use type "obj" or "text". Use bbox arrays as [y_min, x_min, y_max, x_max] on a 0-1000 canvas when placement matters. Hex colors must be uppercase #RRGGBB.`,
 
-midjourney_tags:
-Return one Midjourney-style line only: /imagine prompt: subject-and-scene sentence, comma-separated style tags, composition tags, lighting tags, palette tags, texture tags, atmosphere tags, medium tags --ar aspect_ratio --stylize stylize_value --quality quality_value --chaos chaos_value --no negative_terms. Do not use artist names. Do not add a version flag unless the payload provides one.
+  midjourney_tags: `Return one Midjourney-style line only: /imagine prompt: subject-and-scene sentence, comma-separated style tags, composition tags, lighting tags, palette tags, texture tags, atmosphere tags, medium tags --ar aspect_ratio --stylize stylize_value --quality quality_value --chaos chaos_value --no negative_terms. Do not use artist names. Do not add a version flag unless the payload provides one.`,
 
-deep_director:
-Return plain text only using these exact labeled sections. Write in direct, controlled language — short sections, concrete visual details. Every section should define what must appear, how it should feel, what details matter, and what to avoid.
+  deep_director: `Return plain text only using these exact labeled sections. Do not return JSON. Write in direct, controlled language — short sections, concrete visual details. Every section should define what must appear, how it should feel, what details matter, and what to avoid.
 
 STYLE NAME: A short, evocative name for the visual direction.
 
@@ -974,11 +987,26 @@ MOOD: Emotional temperature, energy level, narrative tension, the feeling the im
 
 NEGATIVE DIRECTION: Explicit failure modes to avoid — wrong genre, wrong lighting, wrong mood, wrong anatomy, wrong surface, wrong setting, over-polish, cartoon exaggeration, fantasy drift, fashion editorial drift, horror drift, CGI uncanny valley. Be specific to this image and grounded in the board's actual content — never exclude something the analyses say is present.
 
-FINAL FORMULA: One single compact sentence that compresses the entire direction into a clean, production-ready prompt.
+FINAL FORMULA: One single compact sentence that compresses the entire direction into a clean, production-ready prompt.`,
+};
 
-Avoid these words and phrases in all sections: cinematic masterpiece, hyper realistic, stunning, ultra detailed, award winning, beautiful, breathtaking, iconic, magical, captivating, immersive, trending on artstation.
+// Assemble the synthesis system prompt for one request: shared rules + ONLY
+// the selected format's spec. The "Selected output format:" marker is also
+// what extractLmStudioFinalContent reads to pick its recovery strategy.
+function buildImageSynthSystem(selectedFormat) {
+  const spec =
+    IMAGE_SYNTH_FORMAT_SPECS[selectedFormat] ||
+    IMAGE_SYNTH_FORMAT_SPECS[DEFAULT_PROMPT_FORMAT];
+  return `${IMAGE_SYNTH_SYSTEM}
 
-Before returning, check that the output has no placeholders, no unresolved notes, no hidden analysis commentary, and no unsupported format.`;
+Selected output format: ${selectedFormat}
+
+${spec}
+
+Avoid these words and phrases everywhere: cinematic masterpiece, hyper realistic, stunning, ultra detailed, award winning, beautiful, breathtaking, iconic, magical, captivating, immersive, trending on artstation.
+
+Before returning, check that the output has no placeholders, no unresolved notes, no hidden analysis commentary, and matches the selected output format exactly.`;
+}
 
 /* Remix kit — decomposes the board's fused direction into isolated,
  * subject-agnostic "lenses" the user can apply to entirely new subjects.
@@ -1032,19 +1060,40 @@ const REMIX_LENSES = [
   { key: "TEMPLATE", label: "Template" },
 ];
 
-// Pull one labeled lens section out of the remix-kit text.
+// Pull one labeled lens section out of the remix-kit text. Line scanner
+// rather than regex so markdown-decorated labels (e.g. "**STYLE LENS:**")
+// from smaller models still parse.
 function extractRemixLens(kit, key) {
   if (!kit) return "";
   if (key === "all") return kit.trim();
   const labels = REMIX_LENSES.filter((l) => l.key !== "all").map((l) => l.key);
-  const pattern = new RegExp(
-    `^${key.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\s*:\\s*([\\s\\S]*?)(?=^(?:${labels
-      .map((l) => l.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&"))
-      .join("|")})\\s*:|$)`,
-    "m"
-  );
-  const m = pattern.exec(kit);
-  return m ? m[1].trim() : "";
+  const normalize = (line) => line.replace(/^[\s*#>-]+/, "");
+  const labelOf = (line) => {
+    const n = normalize(line).toUpperCase();
+    return labels.find((l) => n.startsWith(l + ":")) || null;
+  };
+  const out = [];
+  let collecting = false;
+  for (const line of kit.split("\n")) {
+    const label = labelOf(line);
+    if (label === key) {
+      collecting = true;
+      out.push(
+        normalize(line)
+          .slice(label.length + 1)
+          .replace(/^[\s*]+/, "")
+          .replace(/\*+$/, "")
+          .trim()
+      );
+      continue;
+    }
+    if (label) {
+      if (collecting) break;
+      continue;
+    }
+    if (collecting) out.push(line);
+  }
+  return out.join("\n").trim();
 }
 
 async function generateRemixKit(cfg, references) {
@@ -1209,21 +1258,54 @@ async function synthesizeImagePrompt(
     references: referencesWithDirectives,
   };
 
-  return runCompletion(cfg, {
-    system: IMAGE_SYNTH_SYSTEM,
-    text:
-      `Here are weighted analyses of ${normalized.length} reference image(s) collected on a single image board. ` +
-      `Use selected_format=${selectedFormat}, aspect_ratio=${aspectRatio}, and the weight rules to synthesize one final prompt. ` +
-      `Honor dimension_guidance and each reference's directives: steer the result toward dimensions weighted above 1.0 and away from dimensions weighted below 1.0. ` +
-      `Apply each reference's positive field as must-include content and its negative field as must-avoid content. ` +
-      (characterAnchor?.subject_entities?.length
-        ? `The current character anchor names this subject: ${characterAnchor.subject_entities.join(
-            ", "
-          )}. Preserve the exact named subject if character influence is high.\n\n`
-        : "\n\n") +
-      JSON.stringify(payload, null, 2),
-    maxTokens: selectedFormat === "deep_director" ? 2400 : selectedFormat === "json" || selectedFormat === "ideogram_json" ? 1800 : 1200,
+  const userText =
+    `Here are weighted analyses of ${normalized.length} reference image(s) collected on a single image board. ` +
+    `Use selected_format=${selectedFormat}, aspect_ratio=${aspectRatio}, and the weight rules to synthesize one final prompt. ` +
+    `Honor dimension_guidance and each reference's directives: steer the result toward dimensions weighted above 1.0 and away from dimensions weighted below 1.0. ` +
+    `Apply each reference's positive field as must-include content and its negative field as must-avoid content. ` +
+    (characterAnchor?.subject_entities?.length
+      ? `The current character anchor names this subject: ${characterAnchor.subject_entities.join(
+          ", "
+        )}. Preserve the exact named subject if character influence is high.\n\n`
+      : "\n\n") +
+    JSON.stringify(payload, null, 2);
+  const maxTokens =
+    selectedFormat === "deep_director"
+      ? 2400
+      : selectedFormat === "json" || selectedFormat === "ideogram_json"
+        ? 1800
+        : 1200;
+
+  let out = await runCompletion(cfg, {
+    system: buildImageSynthSystem(selectedFormat),
+    text: userText,
+    maxTokens,
   });
+  // Format guard: if the model returned the wrong shape (e.g. JSON for a
+  // plain-text format), retry once with an explicit correction.
+  if (!outputMatchesFormat(out, selectedFormat)) {
+    out = await runCompletion(cfg, {
+      system: buildImageSynthSystem(selectedFormat),
+      text:
+        `Your previous attempt used the wrong output format. Return strictly the ${selectedFormat} format as specified in the system prompt — no other structure.\n\n` +
+        userText,
+      maxTokens,
+    });
+  }
+  return out;
+}
+
+// Cheap structural check that a synthesis result matches its format.
+function outputMatchesFormat(text, fmt) {
+  const t = (text || "").trim();
+  if (!t) return false;
+  if (fmt === "json" || fmt === "ideogram_json") return t.startsWith("{");
+  if (fmt === "deep_director")
+    return !t.startsWith("{") && /STYLE NAME\s*:/i.test(t);
+  if (fmt === "midjourney_tags") return /\/imagine prompt:/i.test(t);
+  if (fmt === "verbose_flux_caption")
+    return !t.startsWith("{") && /PROMPT\s*:/i.test(t);
+  return true;
 }
 
 async function generateSkillMd(cfg, notes) {
@@ -3427,22 +3509,34 @@ function OnboardingModal({ onClose, onCreate, onSetupLocal }) {
           })}
         </div>
 
-        {/* local AI setup */}
-        <div className="mx-6 mb-4 flex items-center justify-between gap-3 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/60 px-4 py-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <Cpu size={16} className="shrink-0 text-indigo-500" />
+        {/* AI setup — hosted builds need nothing; local builds get the wizard */}
+        {HOSTED_AVAILABLE ? (
+          <div className="mx-6 mb-4 flex items-center gap-3 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/60 px-4 py-3">
+            <Sparkles size={16} className="shrink-0 text-indigo-500" />
             <p className="text-[12px] leading-snug text-slate-600">
-              Mood Director runs on free, private AI on your own machine. First
-              time? We'll set it up together — about five minutes.
+              AI is{" "}
+              <span className="font-semibold text-indigo-600">included</span>{" "}
+              during the beta — drop images and they're analyzed instantly,
+              nothing to install or configure.
             </p>
           </div>
-          <button
-            onClick={onSetupLocal}
-            className="shrink-0 rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-100"
-          >
-            Guided setup
-          </button>
-        </div>
+        ) : (
+          <div className="mx-6 mb-4 flex items-center justify-between gap-3 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/60 px-4 py-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <Cpu size={16} className="shrink-0 text-indigo-500" />
+              <p className="text-[12px] leading-snug text-slate-600">
+                Mood Director runs on free, private AI on your own machine.
+                First time? We'll set it up together — about five minutes.
+              </p>
+            </div>
+            <button
+              onClick={onSetupLocal}
+              className="shrink-0 rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-xs font-medium text-indigo-600 transition-colors hover:bg-indigo-100"
+            >
+              Guided setup
+            </button>
+          </div>
+        )}
 
         {/* actions */}
         <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-6 py-4">
@@ -3979,7 +4073,12 @@ function SettingsModal({
               <option value="" disabled>
                 Choose a provider…
               </option>
-              {BYO_PROVIDERS.map((key) => (
+              {BYO_PROVIDERS.filter(
+                (key) =>
+                  key === p ||
+                  !LOCAL_PROVIDERS_BLOCKED ||
+                  (key !== "lmstudio" && key !== "ollama")
+              ).map((key) => (
                 <option key={key} value={key}>
                   {PROVIDERS[key].label}
                 </option>
