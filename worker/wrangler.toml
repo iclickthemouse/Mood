@@ -22,7 +22,7 @@ id = "REPLACE_WITH_KV_NAMESPACE_ID"
 
 [vars]
 # Comma-separated list of origins allowed to call this worker.
-ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173"
+ALLOWED_ORIGINS = "https://moodirector.com,https://www.moodirector.com,http://localhost:5173,http://localhost:4173"
 # Per-user limits (requests). Tune freely without redeploying secrets.
 LIMIT_PER_MINUTE = "10"
 LIMIT_PER_DAY = "150"
