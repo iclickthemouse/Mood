@@ -1,16 +1,16 @@
 <p align="center">
-  <img src="src/assets/mood-logo.svg" alt="Mood" width="220" />
+  <img src="src/assets/mood-logo.svg" alt="Mood Director" width="220" />
 </p>
 
 <h3 align="center">Distill your mood into prompts.</h3>
 
 ---
 
-**Mood is an infinite-canvas workspace that turns scattered visual inspiration into one clear creative direction — automatically.**
+**Mood Director is an infinite-canvas workspace that turns scattered visual inspiration into one clear creative direction — automatically.**
 
-Drag reference photos onto the canvas, and Mood analyzes each one in real time — color, light, texture, composition, atmosphere — then synthesizes the whole board into a single cohesive image-to-text prompt. Add an image, remove one, and the prompt updates instantly to reflect the new direction.
+Drag reference photos onto the canvas, and Mood Director analyzes each one in real time — color, light, texture, composition, atmosphere — then synthesizes the whole board into a single cohesive image-to-text prompt. Add an image, remove one, and the prompt updates instantly to reflect the new direction.
 
-You collect the way you always have — dragging, arranging, building boards. Mood just does the part that used to take hours of squinting and guessing: turning a pile of references into a clear, usable prompt you can hand to any model.
+You collect the way you always have — dragging, arranging, building boards. Mood Director just does the part that used to take hours of squinting and guessing: turning a pile of references into a clear, usable prompt you can hand to any model.
 
 ## What you can do
 
@@ -24,7 +24,7 @@ You collect the way you always have — dragging, arranging, building boards. Mo
 
 ## Works with any model
 
-Mood is model-agnostic:
+Mood Director is model-agnostic:
 
 - **Cloud** — OpenAI and Google Gemini (bring your own key; runs in the browser and the desktop app).
 - **Local** — LM Studio and Ollama (best in the desktop app, which talks to local model servers natively — no CORS or setup headaches).
@@ -33,7 +33,7 @@ API keys live only in memory for the session and are never persisted.
 
 ## Download (desktop app)
 
-Prebuilt macOS and Windows apps are published on the **[Releases](https://github.com/iclickthemouse/Mood/releases)** page:
+Prebuilt macOS and Windows apps are published on the **[Releases](https://github.com/iclickthemouse/Mood-Director/releases)** page:
 
 - **macOS** — `.dmg` (universal: Apple Silicon + Intel)
 - **Windows** — `.msi` or `.exe`
@@ -73,4 +73,4 @@ src-tauri/          desktop shell (Tauri v2)
 
 ---
 
-<p align="center"><em>Mood: distill your mood into prompts.</em></p>
+<p align="center"><em>Mood Director: turn your mood into direction.</em></p>

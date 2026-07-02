@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "mood",
-  "version": "0.2.2",
+  "productName": "Mood Director",
+  "version": "0.2.3",
   "identifier": "studio.mood.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "mood — distillation studio",
+        "title": "Mood Director",
         "width": 1320,
         "height": 860,
         "minWidth": 900,
@@ -32,8 +32,8 @@
     "active": true,
     "targets": "all",
     "category": "GraphicsAndDesign",
-    "shortDescription": "Image distillation studio",
-    "longDescription": "mood turns reference images into one synthesized image-generation prompt. Works with cloud providers (OpenAI, Gemini) and local models (LM Studio, Ollama).",
+    "shortDescription": "Creative direction studio",
+    "longDescription": "Mood Director turns reference images into one synthesized image-generation prompt. Works with cloud providers (OpenAI, Gemini) and local models (LM Studio, Ollama).",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

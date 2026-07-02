@@ -162,7 +162,7 @@ function weightBand(value) {
  * Claude.ai sandbox they may be blocked by the network/CSP policy.      */
 
 const PROVIDERS = {
-  hosted: { label: "mood hosted", icon: "sparkles", needsKey: false },
+  hosted: { label: "Mood Director hosted", icon: "sparkles", needsKey: false },
   lmstudio: { label: "LM Studio (local)", icon: "cpu", needsKey: false },
   ollama: { label: "Ollama (local)", icon: "cpu", needsKey: false },
   openai: { label: "OpenAI", icon: "cloud", needsKey: true },
@@ -856,7 +856,7 @@ Return one flowing plain-text passage (no preamble, no headings, no markdown, no
 
 Every applicable dimension must be covered — order does not matter, completeness does. Fuse naturally — do not use numbers or labels in the output.`;
 
-const IMAGE_SYNTH_SYSTEM = `You are the mood image distillation agent. You synthesize one image board into one precise image-generation prompt.
+const IMAGE_SYNTH_SYSTEM = `You are the Mood Director synthesis agent. You synthesize one image board into one precise image-generation prompt.
 
 The user may set a weight on each image. Weight is relative synthesis influence, not analysis truth. Default weight is 1.0. Higher-weight images should steer the board more strongly. Lower-weight images should contribute accents, secondary details, or narrow supporting cues.
 
@@ -1616,7 +1616,8 @@ function BetaGate({ onUnlock }) {
           Private beta
         </p>
         <p className="mt-4 text-sm leading-relaxed text-slate-500">
-          mood is in closed testing. Enter the beta password to continue.
+          Mood Director is in closed testing. Enter the beta password to
+          continue.
         </p>
         <input
           type="password"
@@ -2616,7 +2617,7 @@ function Mood({ initialState }) {
         <img src={moodLogo} alt="mood" className="h-7 w-auto" />
         <span className="hidden h-5 w-px bg-slate-200 sm:block" />
         <span className="hidden text-[10px] font-medium uppercase tracking-[0.32em] text-slate-400 sm:block">
-          Distillation Studio
+          Director
         </span>
         <div className="ml-auto flex items-center gap-2 text-xs text-slate-500">
           {activeBoard && (
@@ -3225,7 +3226,7 @@ function OnboardingModal({ onClose, onCreate, onSetupLocal }) {
         <div className="border-b border-slate-200 bg-slate-50 px-8 pb-7 pt-9 text-center">
           <img src={moodLogo} alt="mood" className="mx-auto h-9 w-auto" />
           <p className="mt-4 text-[10px] font-medium uppercase tracking-[0.34em] text-slate-400">
-            Distillation Studio
+            Director
           </p>
           <h2 className="mt-3 font-serif text-2xl font-medium leading-snug tracking-tight text-slate-900">
             Turn source material into
@@ -3264,8 +3265,8 @@ function OnboardingModal({ onClose, onCreate, onSetupLocal }) {
           <div className="flex min-w-0 items-center gap-3">
             <Cpu size={16} className="shrink-0 text-indigo-500" />
             <p className="text-[12px] leading-snug text-slate-600">
-              mood runs on free, private AI on your own machine. First time?
-              We'll set it up together — about five minutes.
+              Mood Director runs on free, private AI on your own machine. First
+              time? We'll set it up together — about five minutes.
             </p>
           </div>
           <button
@@ -3387,9 +3388,9 @@ function LmStudioSetupModal({ config, onClose, onFinish }) {
 
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
           <p className="mb-4 text-[13px] leading-relaxed text-slate-500">
-            mood runs on a free model on your own machine — no account, no API
-            key, nothing leaves your computer. This takes about five minutes,
-            and each step checks itself off as you go.
+            Mood Director runs on a free model on your own machine — no
+            account, no API key, nothing leaves your computer. This takes
+            about five minutes, and each step checks itself off as you go.
           </p>
 
           {/* step 1 — install & open */}
@@ -3423,7 +3424,7 @@ function LmStudioSetupModal({ config, onClose, onFinish }) {
                 Get a vision model
               </h3>
               <p className="mt-0.5 text-[12.5px] leading-relaxed text-slate-500">
-                mood needs a model that can see images. Pick one — the button
+                Mood Director needs a model that can see images. Pick one — the button
                 opens it directly in LM Studio, then click{" "}
                 <span className="font-medium text-slate-600">Download</span>{" "}
                 there.
@@ -3483,7 +3484,7 @@ function LmStudioSetupModal({ config, onClose, onFinish }) {
                 <span className="font-medium text-slate-600">
                   Status: Running
                 </span>{" "}
-                switch. mood will spot it automatically.
+                switch. Mood Director will spot it automatically.
               </p>
               {allDone && (
                 <p className="mt-1.5 text-[12px] font-medium text-emerald-600">
@@ -3775,7 +3776,8 @@ function SettingsModal({
           >
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                <Sparkles size={15} className="text-indigo-500" /> mood hosted
+                <Sparkles size={15} className="text-indigo-500" /> Mood Director
+                hosted
               </span>
               <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
                 free during beta
@@ -3821,7 +3823,7 @@ function SettingsModal({
           {p === "anthropic" && (
             <div className="rounded-md bg-slate-50 p-3 text-xs text-slate-600">
               Uses the built-in Claude API — no key required. Only available
-              when mood runs inside Claude.ai; in the desktop app use a local
+              when Mood Director runs inside Claude.ai; in the desktop app use a local
               or API-key provider instead.
             </div>
           )}
