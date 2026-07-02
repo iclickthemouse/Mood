@@ -23,6 +23,11 @@
         { "url": "https://lmstudio.ai/*" },
         { "url": "lmstudio:*" }
       ]
+    },
+    "dialog:default",
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [{ "path": "**" }]
     }
   ]
 }

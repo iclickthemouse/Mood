@@ -241,7 +241,9 @@ function normalizePersistedConfig(cfg = {}) {
   return next;
 }
 
-function loadPersistedState() {
+// Legacy localStorage persistence — still read for one-time migration into
+// IndexedDB, and used as a last-resort fallback where IndexedDB is missing.
+function loadLegacyState() {
   if (typeof window === "undefined") return EMPTY_PERSISTED_STATE;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -266,7 +268,7 @@ function loadPersistedState() {
   }
 }
 
-function savePersistedState({ boards, activeId, config, promptLibrary }) {
+function saveLegacyState({ boards, activeId, config, promptLibrary }) {
   if (typeof window === "undefined") return;
   const payload = {
     boards,
@@ -276,6 +278,211 @@ function savePersistedState({ boards, activeId, config, promptLibrary }) {
     savedAt: new Date().toISOString(),
   };
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+}
+
+/* --------------------- storage (IndexedDB) --------------------- *
+ * Boards are stored as individual records so saves are incremental
+ * and one corrupt write can't take out the whole library. Unlike
+ * localStorage there is no ~5MB ceiling and browsers treat the data
+ * as durable rather than clearable cache.                          */
+
+const IDB_NAME = "mood";
+const IDB_VERSION = 1;
+let idbFailed = false; // flips true when IndexedDB is unusable → legacy fallback
+let idbPromise = null;
+
+function openMoodDb() {
+  if (!idbPromise) {
+    idbPromise = new Promise((resolve, reject) => {
+      const req = window.indexedDB.open(IDB_NAME, IDB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains("boards"))
+          db.createObjectStore("boards", { keyPath: "id" });
+        if (!db.objectStoreNames.contains("kv")) db.createObjectStore("kv");
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => reject(new Error("IndexedDB open blocked"));
+    });
+  }
+  return idbPromise;
+}
+
+async function idbGet(store, key) {
+  const db = await openMoodDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(store).objectStore(store).get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbGetAll(store) {
+  const db = await openMoodDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(store).objectStore(store).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbWrite(store, fn) {
+  const db = await openMoodDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(store, "readwrite");
+    fn(tx.objectStore(store));
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error("IndexedDB write aborted"));
+  });
+}
+
+async function loadPersistedStateAsync() {
+  if (typeof window === "undefined") return EMPTY_PERSISTED_STATE;
+  if (!window.indexedDB) {
+    idbFailed = true;
+    return loadLegacyState();
+  }
+  try {
+    let boards = await idbGetAll("boards");
+    const migrated = await idbGet("kv", "migrated");
+    if (!boards.length && !migrated) {
+      // First run on IndexedDB — pull anything the old localStorage build
+      // saved. The localStorage copy is left in place as a backup.
+      const legacy = loadLegacyState();
+      const withPos = legacy.boards.map((b, i) => ({ ...b, pos: i }));
+      if (withPos.length) {
+        await idbWrite("boards", (s) => withPos.forEach((b) => s.put(b)));
+      }
+      await idbWrite("kv", (s) => {
+        s.put(legacy.activeId, "activeId");
+        s.put(stripSecretConfig(legacy.config), "config");
+        s.put(legacy.promptLibrary, "promptLibrary");
+        s.put(true, "migrated");
+      });
+      boards = withPos;
+    }
+    boards.sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0));
+    const [activeIdRaw, cfgRaw, libRaw] = await Promise.all([
+      idbGet("kv", "activeId"),
+      idbGet("kv", "config"),
+      idbGet("kv", "promptLibrary"),
+    ]);
+    const activeId =
+      activeIdRaw && boards.some((b) => b.id === activeIdRaw)
+        ? activeIdRaw
+        : boards[0]?.id || null;
+    return {
+      boards,
+      activeId,
+      promptLibrary: Array.isArray(libRaw) ? libRaw : [],
+      config: normalizePersistedConfig(cfgRaw || {}),
+    };
+  } catch (e) {
+    console.warn("mood: IndexedDB unavailable, falling back to localStorage", e);
+    idbFailed = true;
+    return loadLegacyState();
+  }
+}
+
+// Incremental save: only boards whose object identity or position changed
+// are rewritten; removed boards are deleted. `prev` carries the last-saved
+// snapshot map between calls.
+async function savePersistedStateAsync(
+  { boards, activeId, config, promptLibrary },
+  prev
+) {
+  if (typeof window === "undefined") return;
+  if (idbFailed) {
+    saveLegacyState({ boards, activeId, config, promptLibrary });
+    return;
+  }
+  const seen = new Set();
+  const puts = [];
+  boards.forEach((b, i) => {
+    seen.add(b.id);
+    const p = prev.boards.get(b.id);
+    if (!p || p.ref !== b || p.pos !== i) puts.push({ ...b, pos: i });
+  });
+  const removed = [...prev.boards.keys()].filter((id) => !seen.has(id));
+  if (puts.length || removed.length) {
+    await idbWrite("boards", (s) => {
+      puts.forEach((b) => s.put(b));
+      removed.forEach((id) => s.delete(id));
+    });
+  }
+  await idbWrite("kv", (s) => {
+    s.put(activeId, "activeId");
+    s.put(stripSecretConfig(config), "config");
+    s.put(promptLibrary, "promptLibrary");
+  });
+  prev.boards = new Map(boards.map((b, i) => [b.id, { ref: b, pos: i }]));
+}
+
+/* ------------------- board export / import --------------------- *
+ * A .moodboard file is a self-contained JSON snapshot of one board,
+ * images included — portable, backupable, shareable.               */
+
+const BOARD_FILE_SCHEMA = "mood.board.v1";
+
+function boardFileName(name) {
+  const slug = (name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${slug || "board"}.moodboard`;
+}
+
+async function exportBoardToFile(board) {
+  const json = JSON.stringify(
+    { schema: BOARD_FILE_SCHEMA, exportedAt: new Date().toISOString(), board },
+    null,
+    2
+  );
+  const filename = boardFileName(board.name);
+  if (isTauri()) {
+    // Native save dialog — anchor downloads aren't reliable in webviews.
+    const dialog = await import("@tauri-apps/plugin-dialog");
+    const fs = await import("@tauri-apps/plugin-fs");
+    const path = await dialog.save({
+      defaultPath: filename,
+      filters: [{ name: "mood board", extensions: ["moodboard"] }],
+    });
+    if (!path) return false; // user cancelled
+    await fs.writeTextFile(path, json);
+    return true;
+  }
+  const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  return true;
+}
+
+// Parse a .moodboard file and return a board with fresh ids so importing
+// (even into the library it came from) never collides.
+function parseBoardFile(text) {
+  const parsed = JSON.parse(text);
+  const board =
+    parsed?.schema === BOARD_FILE_SCHEMA && parsed.board
+      ? parsed.board
+      : Array.isArray(parsed?.items)
+        ? parsed // tolerate a bare board object
+        : null;
+  if (!board || typeof board.name !== "string" || !Array.isArray(board.items)) {
+    throw new Error("Not a mood board file");
+  }
+  return {
+    ...board,
+    id: uid(),
+    pos: undefined,
+    items: board.items.map((it) => ({ ...it, id: uid() })),
+    outputStatus: board.output ? "ready" : "idle",
+    outputError: "",
+  };
 }
 
 /* In the Tauri desktop build, route HTTP through the native plugin so model
@@ -1327,8 +1534,30 @@ function NoteItem({ item, onStartDrag, onDelete, onChange }) {
 
 /* ---------------------------- app ------------------------------ */
 
-export default function Mood() {
-  const [initialState] = useState(loadPersistedState);
+// Async bootstrap: IndexedDB loads are async, so gate the app on the first
+// read (and the one-time localStorage → IndexedDB migration) finishing.
+export default function MoodApp() {
+  const [initial, setInitial] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    loadPersistedStateAsync()
+      .then((s) => alive && setInitial(s))
+      .catch(() => alive && setInitial(EMPTY_PERSISTED_STATE));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  if (!initial) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-[#ece9e2]">
+        <Loader2 size={22} className="animate-spin text-slate-400" />
+      </div>
+    );
+  }
+  return <Mood initialState={initial} />;
+}
+
+function Mood({ initialState }) {
   const [boards, setBoards] = useState(initialState.boards);
   const [activeId, setActiveId] = useState(initialState.activeId);
   const [promptLibrary, setPromptLibrary] = useState(initialState.promptLibrary);
@@ -1387,13 +1616,27 @@ export default function Mood() {
   useEffect(() => void (activeIdRef.current = activeId), [activeId]);
   useEffect(() => void (configRef.current = config), [config]);
 
+  // Seed the incremental-save snapshot with what was just loaded so the
+  // first save doesn't rewrite every board.
+  const persistPrev = useRef(null);
+  if (persistPrev.current === null) {
+    persistPrev.current = {
+      boards: new Map(initialState.boards.map((b, i) => [b.id, { ref: b, pos: i }])),
+    };
+  }
   useEffect(() => {
     const t = setTimeout(() => {
-      try {
-        savePersistedState({ boards, activeId, config, promptLibrary });
-      } catch (e) {
+      savePersistedStateAsync(
+        { boards, activeId, config, promptLibrary },
+        persistPrev.current
+      ).catch((e) => {
         console.warn("mood could not save local state", e);
-      }
+        try {
+          saveLegacyState({ boards, activeId, config, promptLibrary });
+        } catch {
+          /* both stores failed — nothing else to try */
+        }
+      });
     }, 250);
     return () => clearTimeout(t);
   }, [boards, activeId, config, promptLibrary]);
@@ -2139,6 +2382,31 @@ export default function Mood() {
     }
   };
 
+  const exportBoard = async (id) => {
+    const board = boardsRef.current.find((b) => b.id === id);
+    if (!board) return;
+    try {
+      if (await exportBoardToFile(board)) flash(`Exported "${board.name}".`);
+    } catch (e) {
+      flash(`Export failed: ${e.message}`);
+    }
+  };
+
+  const importInputRef = useRef(null);
+  const onImportBoardFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const board = parseBoardFile(await file.text());
+      commit((prev) => [...prev, board]);
+      setActiveId(board.id);
+      flash(`Imported "${board.name}".`);
+    } catch {
+      flash("Import failed — not a valid .moodboard file.");
+    }
+  };
+
   const copyOutput = () => {
     if (activeBoard?.output)
       navigator.clipboard?.writeText(activeBoard.output).then(
@@ -2305,13 +2573,29 @@ export default function Mood() {
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
               Boards
             </span>
-            <button
-              onClick={() => setShowNew(true)}
-              className="flex items-center gap-1 rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700"
-            >
-              <Plus size={13} /> New
-            </button>
+            <span className="flex items-center gap-1">
+              <button
+                onClick={() => importInputRef.current?.click()}
+                className="rounded border border-slate-300 p-1 text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+                title="Import a .moodboard file"
+              >
+                <Upload size={13} />
+              </button>
+              <button
+                onClick={() => setShowNew(true)}
+                className="flex items-center gap-1 rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700"
+              >
+                <Plus size={13} /> New
+              </button>
+            </span>
           </div>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".moodboard,application/json"
+            className="hidden"
+            onChange={onImportBoardFile}
+          />
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
             {boards.length === 0 && (
               <p className="px-2 py-6 text-center text-xs text-slate-400">
@@ -2357,6 +2641,13 @@ export default function Mood() {
                   {(b.items || []).filter((it) => it.kind === "image").length}
                 </span>
                 <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+                  <button
+                    onClick={() => exportBoard(b.id)}
+                    className="rounded p-0.5 text-slate-400 hover:text-indigo-600"
+                    title="Export board to a .moodboard file"
+                  >
+                    <Download size={12} />
+                  </button>
                   <button
                     onClick={() => {
                       setEditingId(b.id);
@@ -3563,9 +3854,9 @@ function SettingsModal({
             <Server size={12} className="mr-1 inline" />
             API keys live only in memory for this session and are sent straight
             from your browser to the provider. Boards, provider selection, model
-            names, and prompt-library cards are saved in this browser's local
-            storage. For production, proxy requests through a small backend
-            instead of exposing keys client-side.
+            names, and prompt-library cards are saved locally on this device
+            (IndexedDB). Use a board's export button to back it up as a
+            .moodboard file.
           </div>
         </div>
 
