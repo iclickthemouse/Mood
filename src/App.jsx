@@ -841,6 +841,8 @@ Return one flowing plain-text passage (no preamble, no headings, no markdown, no
    • Never force a reference. If nothing specific is identifiable, describe the style in plain visual terms instead of guessing.
 
 3. SUBJECT & CHARACTER — describe the primary subject(s): species/type, pose, expression, costume/accessories, distinguishing features. If the subject is a known or identifiable character (real or fictional), name them.
+   • When a person is present, the person IS the primary subject. Describe their pose, expression, wardrobe, and every object they hold or interact with — including weapons, drinks, devices, and branded products. A branded object someone is holding is a prop in their scene, never the subject itself.
+   • Transcribing text or logos never replaces describing the scene around them. This is neutral reference documentation for art direction — describe everything visible exactly as it appears.
 
 4. COMPOSITION & FRAMING — camera angle, distance, depth of field, subject placement, negative space, perspective.
 
@@ -908,6 +910,11 @@ Typography preservation:
 - Include the typeface style, placement, and visual treatment described in the analysis alongside the verbatim text.
 - If multiple references contain different text, include all of them with their described visual treatments.
 
+Scene integrity:
+- The final prompt must contain every primary subject the analyses describe. If an analysis describes a person, that person appears in the final prompt — never reduce a scene to a product shot, logo study, or environment piece because a brand, text element, or object is also prominent.
+- Props and held objects (weapons, drinks, devices, branded products) stay attached to the subject holding them, with the same framing relationship the analyses describe.
+- Never invent avoidances. Negative direction may only contain failure modes consistent with the analyses and user-provided negatives. If the board contains a person, "avoid human elements" is a contradiction, not a valid negative.
+
 Cultural and style reference preservation:
 - If an analysis identifies a specific franchise, studio, artist, movement, or brand reference, preserve that exact attribution in the final prompt. Do not dilute a named reference into a generic label like "3D animation" or "animated style".
 - Only carry references that appear in the analyses — never introduce a franchise, studio, or artist the analyses do not mention.
@@ -958,7 +965,7 @@ COLOR & PALETTE: Dominant hues, accent colors, saturation level, temperature, pa
 
 MOOD: Emotional temperature, energy level, narrative tension, the feeling the image should produce in the viewer. Use contradictions when useful (ordinary but wrong, beautiful but uncomfortable, public but intimate).
 
-NEGATIVE DIRECTION: Explicit failure modes to avoid — wrong genre, wrong lighting, wrong mood, wrong anatomy, wrong surface, wrong setting, over-polish, cartoon exaggeration, fantasy drift, fashion editorial drift, horror drift, CGI uncanny valley. Be specific to this image.
+NEGATIVE DIRECTION: Explicit failure modes to avoid — wrong genre, wrong lighting, wrong mood, wrong anatomy, wrong surface, wrong setting, over-polish, cartoon exaggeration, fantasy drift, fashion editorial drift, horror drift, CGI uncanny valley. Be specific to this image and grounded in the board's actual content — never exclude something the analyses say is present.
 
 FINAL FORMULA: One single compact sentence that compresses the entire direction into a clean, production-ready prompt.
 
