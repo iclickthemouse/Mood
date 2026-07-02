@@ -890,6 +890,7 @@ Direction semantics for dimension weights (steer toward vs away):
 - Above 1.0 steers toward that reference's take on that dimension. The reference with the highest effective value (overall weight x dimension weight) leads that dimension for the whole board and should visibly shape it.
 - Below 1.0 steers away: reduce that reference's influence on that dimension. Below 0.5 means actively avoid that reference's take on that dimension — prefer other references for it, and if no reference steers toward that dimension, keep it understated, neutral, and unremarkable rather than inventing emphasis.
 - The payload provides dimension_guidance (per-dimension leader, steer_toward list, steer_away list) and a directives list on each reference. Treat these as binding art direction, not suggestions. Resolve conflicts in favor of the higher effective influence, and in favor of explicit user intent when stated.
+- Leadership is material, not atmospheric. The character leader's subject content must appear at subject level in the final prompt — named in the subject description itself, not relegated to environment hints, palette echoes, or mood words. If the character leader is a non-human object, creature, logo, or motif while other references contain people, fuse it INTO the subject: a central prop, a worn or held object, a dominant emblem — the user raised that dial to put it in the frame. The same applies per dimension: the style leader's style is THE style, the lighting leader's light is THE light.
 
 User overrides per reference (positive / negative):
 - Each reference may include a positive field (user-supplied content, tags, or focuses to include) and a negative field (user-supplied content to avoid or exclude). These are explicit user intent and outrank the image analysis.
@@ -957,7 +958,7 @@ BODY / POSE: Posture, gesture, body language, physical proportions, weight distr
 
 WARDROBE / OBJECTS: Clothing materials, condition, fit, color. Props, accessories — their texture, wear, placement, and relationship to the subject.
 
-TYPOGRAPHY: If text appears, transcribe it exactly in quotes. Describe typeface style, weight, color, size, placement, dimensionality, and effects. If no text, omit this section entirely.
+TYPOGRAPHY: If any analysis transcribes text or identifies a logo, brand mark, signature, or emblem, it belongs here — exact strings in quotes, marks described with their material and treatment (e.g. a swoosh formed from horseshoe metal). Write "None" only when no analysis contains any text, logo, or mark. If genuinely none, omit this section entirely.
 
 PHOTOGRAPHY / RENDERING: Camera type (real or virtual), lens behavior, focal length feel, depth of field, film stock or render engine quality, grain or noise, sharpness, aberration. Define the boundary: real vs artificial, documentary vs cinematic, photograph vs render.
 
