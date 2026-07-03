@@ -51,10 +51,24 @@ export default {
 
 async function login(request, env, cors) {
   const { password } = await request.json().catch(() => ({}));
+  if (typeof password !== "string") {
+    return json({ error: "Wrong password" }, 401, cors);
+  }
+
+  // Owner password: token uid carries an "admin-" prefix (covered by the
+  // HMAC signature, so it can't be forged) and skips every rate limit and
+  // the redemption cap.
   if (
-    typeof password !== "string" ||
-    !(await constantTimeEqual(password, env.BETA_PASSWORD))
+    env.ADMIN_PASSWORD &&
+    (await constantTimeEqual(password, env.ADMIN_PASSWORD))
   ) {
+    const uid = `admin-${crypto.randomUUID()}`;
+    const exp = Date.now() + TOKEN_TTL_MS;
+    const sig = await hmac(env.TOKEN_SECRET, `${uid}.${exp}`);
+    return json({ token: `${uid}.${exp}.${sig}` }, 200, cors);
+  }
+
+  if (!(await constantTimeEqual(password, env.BETA_PASSWORD))) {
     return json({ error: "Wrong password" }, 401, cors);
   }
   // Cap how many times this password can be redeemed. The counter key is
@@ -124,6 +138,9 @@ async function constantTimeEqual(a, b) {
 /* --------------------------- rate limits -------------------------- */
 
 async function checkRateLimit(env, uid) {
+  // Owner tokens are exempt from all limits and don't count toward the
+  // global cap.
+  if (uid.startsWith("admin-")) return { ok: true };
   const now = new Date();
   const day = now.toISOString().slice(0, 10);
   const minuteKey = `m:${uid}:${Math.floor(now.getTime() / 60000)}`;
