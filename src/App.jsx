@@ -3971,6 +3971,15 @@ function HostedAccessControls({ active, onUseHosted }) {
           Use hosted model
         </button>
       )}
+      <button
+        onClick={() => {
+          window.localStorage.removeItem(HOSTED_TOKEN_KEY);
+          setHasToken(false);
+        }}
+        className="mt-1.5 text-[11px] text-slate-400 underline hover:text-slate-600"
+      >
+        Sign out / switch password
+      </button>
     </div>
   );
 }
