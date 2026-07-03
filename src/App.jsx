@@ -42,6 +42,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import moodLogo from "./assets/mood-logo.svg";
+import sampleBoardImg from "./assets/sample-board.jpg";
 
 /* ------------------------------------------------------------------ *
  *  mood — infinite-canvas mood board workspace
@@ -2708,6 +2709,43 @@ function Mood({ initialState }) {
     resetView();
   };
 
+  // Guided first board: pre-seeded with a bundled sample photo (and a
+  // walkthrough note) so the analyze → synthesize loop demonstrates itself
+  // without the user having to hunt for an image first.
+  const createFirstBoard = useCallback(async () => {
+    const board = {
+      id: uid(),
+      name: "My first board",
+      type: "image",
+      promptFormat: DEFAULT_PROMPT_FORMAT,
+      items: [],
+      output: "",
+      outputStatus: "idle",
+      outputError: "",
+    };
+    commit((prev) => [...prev, board]);
+    setActiveId(board.id);
+    addItem(board.id, {
+      id: uid(),
+      kind: "text",
+      content:
+        "Welcome! This sample photo is already being analyzed.\n\n1. Flip the card to read what the model saw — you can edit it.\n2. Drag your own images anywhere on the canvas.\n3. Tune the weight dials; the prompt on the right rebuilds itself.\n\nDelete this note whenever you like.",
+      x: 40,
+      y: 60,
+      z: ++zRef.current,
+    });
+    try {
+      const res = await fetch(sampleBoardImg);
+      const blob = await res.blob();
+      const file = new File([blob], "sample-typewriter.jpg", {
+        type: blob.type || "image/jpeg",
+      });
+      await addImage(board.id, file, 320, 60);
+    } catch {
+      flash("Couldn't load the sample image — drop one of your own instead.");
+    }
+  }, [commit, addItem, addImage, flash]);
+
   const selectBoard = (id) => {
     setActiveId(id);
     resetView();
@@ -3102,7 +3140,11 @@ function Mood({ initialState }) {
                 <Sparkles size={40} className="text-slate-300" />
                 <p className="text-sm">Create or select a board to begin.</p>
                 <button
-                  onClick={() => setShowNew(true)}
+                  onClick={() =>
+                    boardsRef.current.length === 0
+                      ? createFirstBoard()
+                      : setShowNew(true)
+                  }
                   className="flex items-center gap-1 rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700"
                 >
                   <Plus size={15} /> Create your first board
@@ -3420,7 +3462,10 @@ function Mood({ initialState }) {
           onClose={dismissOnboarding}
           onCreate={() => {
             dismissOnboarding();
-            setShowNew(true);
+            // First-ever board gets the guided sample; after that, the
+            // normal new-board modal.
+            if (boardsRef.current.length === 0) createFirstBoard();
+            else setShowNew(true);
           }}
           onSetupLocal={() => {
             dismissOnboarding();
