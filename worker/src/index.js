@@ -221,7 +221,7 @@ async function generate(request, env, cors) {
   };
   if (system) payload.systemInstruction = { parts: [{ text: system }] };
 
-  const model = env.GEMINI_MODEL || "gemini-2.5-flash-lite";
+  const model = env.GEMINI_MODEL || "gemini-3.1-flash-lite";
   // Gemini intermittently returns 429/500/503 under load; these usually
   // clear within a second, so absorb them with a couple of retries instead
   // of surfacing every blip to the user.
