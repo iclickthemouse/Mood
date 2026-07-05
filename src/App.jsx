@@ -42,7 +42,9 @@ import {
   ExternalLink,
 } from "lucide-react";
 import moodLogo from "./assets/mood-logo.svg";
-import sampleBoardImg from "./assets/sample-board.jpg";
+import sampleTypewriterImg from "./assets/sample-board.jpg";
+import sampleSunsetImg from "./assets/sample-sunset.jpg";
+import samplePlantImg from "./assets/sample-plant.jpg";
 
 /* ------------------------------------------------------------------ *
  *  mood — infinite-canvas mood board workspace
@@ -1789,6 +1791,73 @@ function NoteItem({ item, onStartDrag, onDelete, onChange }) {
   );
 }
 
+/* ---------------------- guided first board --------------------- *
+ * The demo board ships fully precomputed — analyses, fused prompt, and a
+ * two-entry history that shows how raising one weight redirects the
+ * direction. No model call happens until the user changes something;
+ * the seeded content signature makes the auto-synthesis effect treat the
+ * canned output as current.                                              */
+
+const DEMO_SAMPLES = [
+  {
+    img: sampleTypewriterImg,
+    name: "sample-typewriter.jpg",
+    x: 320,
+    weight: 1.0,
+    dims: {},
+    analysis:
+      'A vintage black FAVORIT typewriter photographed directly from above on a pale grey seamless background, the brand name "FAVORIT" stamped across its front panel in worn gold serif capitals. A blank sheet of paper rises from the platen into the empty upper half of the frame. The composition is strictly centered and symmetrical with generous negative space, lit by soft, even, shadowless studio light. Glossy black enamel, round glass-topped keys, and brushed steel details give a tactile machine-age materiality; the palette is a muted monochrome with brass accents. The mood is quiet, archival, and nostalgic — clean product photography with a museum-catalog finish.',
+  },
+  {
+    img: sampleSunsetImg,
+    name: "sample-sunset.jpg",
+    x: 590,
+    weight: 2.3,
+    dims: { lighting: 1.4 },
+    analysis:
+      "A muddy rural track at golden hour, shot from low and close so frozen puddles and tire ruts dominate the foreground while the sun flares hard from the left horizon. Backlit dry grasses and bare scrub catch amber rim light along the ridge; a dirt road curves away toward distant trees under a hazy peach-to-blue sky. The palette runs from burnt orange and honey gold into cool slate blues trapped in the ice. Textures are heavy and tactile — cracked mud, glassy ice, brittle stalks. Strong atmospheric depth with visible sun haze and long soft shadows; the mood is raw, wandering, and end-of-day quiet. Documentary landscape photograph with warm film-like color.",
+  },
+  {
+    img: samplePlantImg,
+    name: "sample-plant.jpg",
+    x: 860,
+    weight: 0.6,
+    dims: {},
+    analysis:
+      "An extreme macro of a flowering shrub before bloom: dozens of pale, closed buds on thin stems fan out between thick glossy leaves beaded with rainwater. Focus is razor-thin — one dewy leaf and the nearest buds are sharp while the background dissolves into deep teal-green shadow. The palette is saturated botanical green shading into near-black blue-greens, with the buds adding soft cream accents. Cool, humid, after-rain atmosphere; intimate and hushed in mood. Naturalistic macro photograph with shallow depth of field and gentle diffused light.",
+  },
+];
+
+const DEMO_PROMPT_V1 = `PROMPT: A vintage black FAVORIT typewriter with "FAVORIT" in worn gold serif lettering stands centered on weathered ground where cracked mud meets a pale seamless backdrop, a blank page rising from its platen. Even, diffused light keeps the scene calm and catalog-clean while dew-flecked green leaves edge the lower frame, their moisture echoing on the machine's glossy enamel. Muted monochrome and brass tones sit against botanical greens and a distant band of warm horizon light; textures contrast machine-age steel and glass keys with soft organic foliage and damp earth. Centered, symmetrical composition with generous negative space; quiet, nostalgic, faintly wild mood. Documentary-clean photographic finish with fine film grain.
+
+NEGATIVE PROMPT: harsh midday sun, oversaturated neon color, cartoon, illustration, plastic-looking textures, clutter, extra text, watermark, busy background
+
+STYLE KEYWORDS: vintage typewriter, worn gold serif lettering, seamless backdrop, dew-flecked foliage, cracked mud, soft diffused light, muted monochrome, brass accents, botanical green, film grain, centered symmetry, negative space, tactile materials, quiet nostalgia
+
+PARAMETER NOTES:
+- Aspect 1:1 keeps the symmetrical, catalog-style framing.
+- Keep the lettering legible: render "FAVORIT" exactly, no substitutes.
+- Balance studio cleanliness against organic texture roughly 50/50.`;
+
+const DEMO_PROMPT_V2 = `PROMPT: A vintage black FAVORIT typewriter, its front panel lettered "FAVORIT" in worn gold serif capitals, sits abandoned on a muddy rural track at golden hour, a blank page in its platen catching the last light. The low sun flares hard from the left, dragging long shadows across frozen puddles and tire ruts and rimming the machine's glossy enamel, round glass keys, and backlit dry grasses in amber. Burnt orange and honey gold pour across the scene and cool into slate blue where ice traps the sky; dew-beaded leaves in deep teal-green edge the foreground with soft cream buds as quiet accents. Textures are heavy and tactile — cracked mud, glassy ice, brittle stalks, machine-age steel. Low, close camera with strong atmospheric haze and shallow foreground focus; the mood is raw, nostalgic, end-of-day quiet. Warm film-like documentary photograph.
+
+NEGATIVE PROMPT: flat even studio lighting, clinical seamless backdrop, harsh midday sun, oversaturated neon, cartoon, plastic textures, extra text, watermark
+
+STYLE KEYWORDS: golden hour flare, amber rim light, vintage typewriter, worn gold serif lettering, muddy track, frozen puddles, backlit grasses, teal-green foliage accents, dew, long shadows, film-like warmth, atmospheric haze, tactile textures, rural stillness, nostalgic documentary
+
+PARAMETER NOTES:
+- Aspect 1:1; keep the typewriter low in frame with the flare entering left.
+- Golden-hour light leads every surface — avoid neutral studio fill.
+- Render "FAVORIT" exactly as written; the lettering is a focal detail.`;
+
+const DEMO_NOTE = `Welcome! This starter board is precomputed so you can see the whole idea at a glance — nothing has been sent to a model yet.
+
+1. Three sample photos, three roles: the sunset is weighted 2.3× (it leads), the typewriter 1.0×, the plant 0.6× (accents only).
+2. Open the prompt history (clock icon, top right) to see how raising the sunset's weight redirected the whole prompt.
+3. Flip any card to read — and edit — what the model saw.
+
+Change anything (a weight, an analysis, your own image) and Mood Director regenerates the prompt for real.`;
+
 /* ---------------------------- app ------------------------------ */
 
 // Beta entry gate for the hosted web deployment: the whole app sits behind
@@ -2709,42 +2778,115 @@ function Mood({ initialState }) {
     resetView();
   };
 
-  // Guided first board: pre-seeded with a bundled sample photo (and a
-  // walkthrough note) so the analyze → synthesize loop demonstrates itself
-  // without the user having to hunt for an image first.
+  // Guided first board: pre-seeded with three bundled sample photos whose
+  // analyses, weights, fused prompt, and history are all precomputed — the
+  // full workflow demonstrates itself instantly and costs zero model calls.
+  // The seeded signature keeps auto-synthesis idle until the user actually
+  // changes something, at which point live generation takes over.
   const createFirstBoard = useCallback(async () => {
-    const board = {
+    const boardId = uid();
+    let srcs = null;
+    try {
+      srcs = await Promise.all(
+        DEMO_SAMPLES.map(async (s) => {
+          const blob = await (await fetch(s.img)).blob();
+          const raw = await readFileAsDataUrl(blob);
+          return downscaleDataUrl(raw, 1024, 0.85);
+        })
+      );
+    } catch {
+      /* fall back to an empty board below */
+    }
+    if (!srcs) {
+      commit((prev) => [
+        ...prev,
+        {
+          id: boardId,
+          name: "My first board",
+          type: "image",
+          promptFormat: DEFAULT_PROMPT_FORMAT,
+          items: [],
+          output: "",
+          outputStatus: "idle",
+          outputError: "",
+        },
+      ]);
+      setActiveId(boardId);
+      flash("Couldn't load the sample images — drop your own to begin.");
+      return;
+    }
+
+    const imageItems = DEMO_SAMPLES.map((s, i) => ({
       id: uid(),
-      name: "My first board",
-      type: "image",
-      promptFormat: DEFAULT_PROMPT_FORMAT,
-      items: [],
-      output: "",
-      outputStatus: "idle",
-      outputError: "",
-    };
-    commit((prev) => [...prev, board]);
-    setActiveId(board.id);
-    addItem(board.id, {
+      kind: "image",
+      src: srcs[i],
+      x: s.x,
+      y: 60,
+      z: ++zRef.current,
+      weight: s.weight,
+      dimensionWeights: { ...DEFAULT_DIMENSION_WEIGHTS, ...s.dims },
+      positive: "",
+      negative: "",
+      disabled: false,
+      analysis: s.analysis,
+      analysisStatus: "ready",
+    }));
+    const noteItem = {
       id: uid(),
       kind: "text",
-      content:
-        "Welcome! This sample photo is already being analyzed.\n\n1. Flip the card to read what the model saw — you can edit it.\n2. Drag your own images anywhere on the canvas.\n3. Tune the weight dials; the prompt on the right rebuilds itself.\n\nDelete this note whenever you like.",
+      content: DEMO_NOTE,
       x: 40,
       y: 60,
       z: ++zRef.current,
-    });
-    try {
-      const res = await fetch(sampleBoardImg);
-      const blob = await res.blob();
-      const file = new File([blob], "sample-typewriter.jpg", {
-        type: blob.type || "image/jpeg",
-      });
-      await addImage(board.id, file, 320, 60);
-    } catch {
-      flash("Couldn't load the sample image — drop one of your own instead.");
-    }
-  }, [commit, addItem, addImage, flash]);
+    };
+    // History tells the weight story: v1 with everything at 1.0, then the
+    // current v2 after the sunset was raised to lead.
+    const refsFor = (weights) =>
+      imageItems.map((it, i) => ({
+        id: it.id,
+        weight: weights ? weights[i] : it.weight,
+        dimensionWeights: it.dimensionWeights,
+        positive: "",
+        negative: "",
+        analysis: it.analysis,
+      }));
+    const now = Date.now();
+    const history = [
+      {
+        id: uid(),
+        ts: new Date(now).toISOString(),
+        prompt: DEMO_PROMPT_V2,
+        format: DEFAULT_PROMPT_FORMAT,
+        inputs: refsFor(null),
+        summary: "1 weight changed",
+      },
+      {
+        id: uid(),
+        ts: new Date(now - 60_000).toISOString(),
+        prompt: DEMO_PROMPT_V1,
+        format: DEFAULT_PROMPT_FORMAT,
+        inputs: refsFor([1.0, 1.0, 1.0]),
+        summary: "First synthesis — 3 images, equal weights",
+      },
+    ];
+    const board = {
+      id: boardId,
+      name: "My first board",
+      type: "image",
+      promptFormat: DEFAULT_PROMPT_FORMAT,
+      items: [noteItem, ...imageItems],
+      output: DEMO_PROMPT_V2,
+      outputStatus: "ready",
+      outputError: "",
+      history,
+    };
+    // Mark the canned output as current so the synthesis effect stays idle
+    // until the user changes something.
+    lastSig.current[boardId] =
+      DEFAULT_PROMPT_FORMAT + "|" + imageContentSig(imageItems);
+    commit((prev) => [...prev, board]);
+    setActiveId(boardId);
+  }, [commit, flash]);
 
   const selectBoard = (id) => {
     setActiveId(id);
