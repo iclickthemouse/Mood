@@ -1920,7 +1920,7 @@ const DEMO_NOTE = `Welcome! This starter board is precomputed so you can see the
 3. Flip any card to read — and edit — what the model saw.
 4. Notes steer too: add one and open its eye to weave written direction into the prompt. (This note's eye is closed, so it stays out.)
 
-Change anything (a weight, an analysis, your own image) and Mood Director regenerates the prompt for real.`;
+Change anything — a weight, an analysis, a note — and a Reprompt button appears on the right. Nothing regenerates until you ask, so tune freely.`;
 
 /* ---------------------------- app ------------------------------ */
 
@@ -2230,7 +2230,7 @@ function ScriptedTour({ onFinish }) {
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-slate-500">
               Every image read like a brief. Every dial yours. Prompts that
-              rebuild themselves as the board changes — plus a remix kit that
+              rebuild on your cue as the board grows — plus a remix kit that
               turns any board into reusable style lenses.
             </p>
             <button
@@ -2391,6 +2391,8 @@ function Mood({ initialState }) {
   const scaleRef = useRef(scale);
   const activeIdRef = useRef(activeId);
   const lastSig = useRef({}); // boardId -> signature of last generated content
+  const lastGenCount = useRef({}); // boardId -> image count at last generation
+  const lastSigSource = useRef({}); // boardId -> "generated" | "adopted" (post-reload)
   const genToken = useRef({}); // boardId -> async token
   const timers = useRef({}); // boardId -> debounce timer
   // Start the z counter above any persisted item so newly dragged cards
@@ -2474,6 +2476,41 @@ function Mood({ initialState }) {
     showSettings || showHistory || showLibrary || showNew || showOnboarding || showLmSetup;
 
   const activeBoard = boards.find((b) => b.id === activeId) || null;
+
+  // Human-readable list of what changed since the current prompt was made,
+  // shown in the Reprompt banner (diffed against the last history entry).
+  const pendingSummary = (() => {
+    if (!activeBoard || activeBoard.type !== "image" || !activeBoard.outputStale)
+      return "";
+    const last = activeBoard.history?.[0];
+    if (!last?.inputs) return "";
+    const curr = [
+      ...readyImageRefs(activeBoard).map((r) => ({
+        id: r.id,
+        weight: r.weight,
+        dimensionWeights: r.dimensionWeights,
+        positive: r.positive || "",
+        negative: r.negative || "",
+        analysis: r.analysis || "",
+      })),
+      ...enabledBoardNotes(activeBoard).map((n) => ({
+        id: n.id,
+        weight: 1,
+        dimensionWeights: { ...DEFAULT_DIMENSION_WEIGHTS },
+        positive: "",
+        negative: "",
+        analysis: "",
+        note: n.content || "",
+      })),
+    ];
+    const s = summarizeInputChange(
+      last.inputs,
+      curr,
+      last.format,
+      activeBoard.promptFormat || DEFAULT_PROMPT_FORMAT
+    );
+    return s === "Regenerated (no board change)" ? "" : s;
+  })();
 
   const flash = useCallback((msg) => {
     setToast(msg);
@@ -2565,7 +2602,13 @@ function Mood({ initialState }) {
 
   const setOutput = useCallback(
     (id, status, output, error = "") =>
-      patchBoard(id, { outputStatus: status, output, outputError: error }),
+      patchBoard(id, {
+        outputStatus: status,
+        output,
+        outputError: error,
+        // A fresh successful generation is by definition current.
+        ...(status === "ready" ? { outputStale: false } : {}),
+      }),
     [patchBoard]
   );
 
@@ -2695,37 +2738,68 @@ function Mood({ initialState }) {
         }
         const selectedFormat = board.promptFormat || DEFAULT_PROMPT_FORMAT;
         const sig = selectedFormat + "|" + boardContentSig(board);
+        const prevSig = lastSig.current[board.id];
         // First sight of a board this session with a persisted output:
         // adopt the signature instead of regenerating, so app loads don't
         // re-run every board (and re-bill every synthesis).
         if (
-          lastSig.current[board.id] === undefined &&
+          prevSig === undefined &&
           board.outputStatus === "ready" &&
           board.output
         ) {
           lastSig.current[board.id] = sig;
+          lastGenCount.current[board.id] = ready.length;
+          lastSigSource.current[board.id] = "adopted";
           return;
         }
-        if (lastSig.current[board.id] !== sig) {
-          lastSig.current[board.id] = sig;
-          if (board.outputStatus !== "loading")
-            setOutput(board.id, "loading", board.output);
-          const references = ready.map((r) => ({
-            id: r.id,
-            weight: clampImageWeight(r.weight),
-            dimensionWeights: normalizeDimensionWeights(r.dimensionWeights),
-            positive: r.positive || "",
-            negative: r.negative || "",
-            analysis: r.analysis,
-          }));
-          const notes = enabledBoardNotes(board).map((n) => ({
-            id: n.id,
-            content: n.content.trim(),
-          }));
-          scheduleRegen(board.id, () =>
-            runImageSynth(board.id, references, selectedFormat, notes)
-          );
+        if (sig === prevSig) {
+          // Content drifted and came back to exactly what produced this
+          // output — only trust that when the signature came from a real
+          // generation this session, not a post-reload adoption.
+          if (
+            board.outputStale &&
+            lastSigSource.current[board.id] === "generated"
+          ) {
+            patchBoard(board.id, { outputStale: false });
+          }
+          return;
         }
+        // Content changed. Regenerate silently only when a regen can't be
+        // wasted; otherwise mark stale and wait for the Reprompt button.
+        const prevCount = lastGenCount.current[board.id];
+        const prevFormat =
+          prevSig !== undefined ? prevSig.slice(0, prevSig.indexOf("|")) : null;
+        const countChanged =
+          prevCount !== undefined && prevCount !== ready.length;
+        const auto =
+          !board.output || // nothing on screen yet — first synthesis
+          board.outputStatus === "error" || // broken output, retry freely
+          (prevFormat !== null && prevFormat !== selectedFormat) || // explicit format ask
+          (countChanged && ready.length <= 3); // small boards stay live while forming
+        if (!auto) {
+          if (!board.outputStale) patchBoard(board.id, { outputStale: true });
+          return;
+        }
+        lastSig.current[board.id] = sig;
+        lastGenCount.current[board.id] = ready.length;
+        lastSigSource.current[board.id] = "generated";
+        if (board.outputStatus !== "loading")
+          setOutput(board.id, "loading", board.output);
+        const references = ready.map((r) => ({
+          id: r.id,
+          weight: clampImageWeight(r.weight),
+          dimensionWeights: normalizeDimensionWeights(r.dimensionWeights),
+          positive: r.positive || "",
+          negative: r.negative || "",
+          analysis: r.analysis,
+        }));
+        const notes = enabledBoardNotes(board).map((n) => ({
+          id: n.id,
+          content: n.content.trim(),
+        }));
+        scheduleRegen(board.id, () =>
+          runImageSynth(board.id, references, selectedFormat, notes)
+        );
       } else {
         const notes = board.items
           .filter((it) => it.kind === "text")
@@ -2747,7 +2821,7 @@ function Mood({ initialState }) {
         }
       }
     });
-  }, [boards, setOutput, scheduleRegen, runImageSynth, runSkill]);
+  }, [boards, setOutput, patchBoard, scheduleRegen, runImageSynth, runSkill]);
 
   const handleRegenerate = useCallback(() => {
     const b = boardsRef.current.find((x) => x.id === activeIdRef.current);
@@ -2763,6 +2837,8 @@ function Mood({ initialState }) {
       if (!ready.length) return;
       const selectedFormat = b.promptFormat || DEFAULT_PROMPT_FORMAT;
       lastSig.current[b.id] = selectedFormat + "|" + boardContentSig(b);
+      lastGenCount.current[b.id] = ready.length;
+      lastSigSource.current[b.id] = "generated";
       setOutput(b.id, "loading", b.output);
       runImageSynth(
         b.id,
@@ -3302,6 +3378,8 @@ function Mood({ initialState }) {
     // until the user changes something.
     lastSig.current[boardId] =
       DEFAULT_PROMPT_FORMAT + "|" + boardContentSig(board);
+    lastGenCount.current[boardId] = imageItems.length;
+    lastSigSource.current[boardId] = "generated";
     commit((prev) => [...prev, board]);
     setActiveId(boardId);
   }, [commit, flash]);
@@ -3913,6 +3991,26 @@ function Mood({ initialState }) {
               )}
             </div>
           )}
+
+          {/* opt-in regeneration: board changed since this prompt */}
+          {activeBoard?.type === "image" &&
+            activeBoard.outputStale &&
+            activeBoard.outputStatus !== "loading" && (
+              <div className="border-b border-amber-200 bg-amber-50 px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate text-[11px] text-amber-800">
+                    Board changed
+                    {pendingSummary ? ` · ${pendingSummary}` : ""}
+                  </span>
+                  <button
+                    onClick={handleRegenerate}
+                    className="flex shrink-0 items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-700"
+                  >
+                    <RefreshCw size={12} /> Reprompt
+                  </button>
+                </div>
+              </div>
+            )}
 
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
             {!activeBoard && (

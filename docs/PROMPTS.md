@@ -15,8 +15,13 @@ constant names below if this document drifts.
 │        "What the model saw" — editable text on the card back.
 │        User edits OUTRANK the model; edits re-enter the flow.
 │
-├ any content change (weights, dials, +/- fields, analyses, format)
-│      → content signature changes → debounce → auto-synthesis
+├ any content change (weights, dials, +/- fields, analyses, notes, format)
+│      → content signature changes → regen decision:
+│        AUTO (silent) only when a regen can't be wasted — no output yet,
+│        errored output, format switch, or image count change on a small
+│        (≤3 image) board. Everything else marks the board stale and shows
+│        a Reprompt button (with a pending-change summary); staleness
+│        persists across reloads.
 │                          │
 │                          ▼
 │   buildImageSynthSystem(format)  =  IMAGE_SYNTH_SYSTEM (shared rules)
