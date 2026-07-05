@@ -1924,6 +1924,331 @@ Change anything (a weight, an analysis, your own image) and Mood Director regene
 
 /* ---------------------------- app ------------------------------ */
 
+/* ----------------------- scripted tour -------------------------- *
+ * Shown on the hosted web build BEFORE the beta password gate: a fully
+ * precomputed walkthrough of the analyze → weigh → note → prompt loop.
+ * Every interaction is real UI but every result is canned — zero model
+ * calls, works logged-out, and doubles as the pitch.                    */
+
+const TOUR_KEY = "mood.tour.v1";
+
+const TOUR_PROMPT_V1 = [
+  {
+    t: 'A vintage black FAVORIT typewriter with "FAVORIT" in worn gold serif lettering stands centered where cracked mud meets a pale seamless backdrop, a blank page rising from its platen. Even, diffused light keeps the scene catalog-clean while dew-flecked leaves edge the frame; muted monochrome and brass against botanical green. Centered, symmetrical, quiet.',
+  },
+];
+
+const TOUR_PROMPT_V2 = [
+  { t: 'A vintage black FAVORIT typewriter, lettered "FAVORIT" in worn gold serif capitals, sits abandoned ' },
+  { t: "on a muddy rural track at golden hour", hl: true },
+  { t: ", a blank page catching the last light. " },
+  { t: "The low sun flares hard from the left", hl: true },
+  { t: ", dragging " },
+  { t: "long shadows across frozen puddles", hl: true },
+  { t: " and rimming the enamel and backlit grasses " },
+  { t: "in amber", hl: true },
+  { t: ". Dew-beaded teal-green leaves edge the foreground. " },
+  { t: "Raw, nostalgic, end-of-day quiet.", hl: true },
+];
+
+const TOUR_NOTE_CHOICES = [
+  {
+    label: "make it feel like a 1970s album cover",
+    segs: [
+      { t: "A vintage black FAVORIT typewriter abandoned on a muddy track at golden hour, " },
+      { t: "styled as a 1972 gatefold album cover", hl: true },
+      { t: ": " },
+      { t: "heavy warm film grain", hl: true },
+      { t: ", " },
+      { t: "faded Kodachrome palette", hl: true },
+      { t: ", sun flare dragging long amber shadows, " },
+      { t: "hand-set serif title space held open across the sky", hl: true },
+      { t: ". Raw, nostalgic, needle-drop quiet." },
+    ],
+  },
+  {
+    label: "make it rain — moody, cinematic",
+    segs: [
+      { t: "A vintage black FAVORIT typewriter abandoned on a muddy track " },
+      { t: "in falling rain at blue hour", hl: true },
+      { t: ", the last amber light fighting through " },
+      { t: "streaked drizzle and rising mist", hl: true },
+      { t: ". " },
+      { t: "Rain beads on the enamel", hl: true },
+      { t: ", puddles catch a cold slate sky, dew-heavy leaves crowd the foreground. " },
+      { t: "Somber, cinematic, held-breath quiet.", hl: true },
+    ],
+  },
+];
+
+function TourPrompt({ segs }) {
+  return (
+    <p className="whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed text-slate-700">
+      {segs.map((s, i) =>
+        s.hl ? (
+          <mark key={i} className="rounded bg-amber-200/80 px-0.5">
+            {s.t}
+          </mark>
+        ) : (
+          <span key={i}>{s.t}</span>
+        )
+      )}
+    </p>
+  );
+}
+
+function ScriptedTour({ onFinish }) {
+  const [stage, setStage] = useState(0); // 0 intro · 1 analyze/flip · 2 weight · 3 note · 4 outro
+  const [analyzedCount, setAnalyzedCount] = useState(0);
+  const [flipped, setFlipped] = useState(null);
+  const [weight, setWeight] = useState(1.0);
+  const [weightDone, setWeightDone] = useState(false);
+  const [noteChoice, setNoteChoice] = useState(null);
+
+  // Stage 1: cards "analyze" themselves on a staggered clock.
+  useEffect(() => {
+    if (stage !== 1) return;
+    const timers = [600, 1300, 2000].map((ms, i) =>
+      setTimeout(() => setAnalyzedCount(i + 1), ms)
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [stage]);
+
+  const samples = DEMO_SAMPLES;
+  const promptSegs =
+    noteChoice != null
+      ? TOUR_NOTE_CHOICES[noteChoice].segs
+      : weightDone
+        ? TOUR_PROMPT_V2
+        : TOUR_PROMPT_V1;
+  const showPrompt = stage >= 1 && analyzedCount >= 3;
+
+  const captions = [
+    null,
+    "Every image you drop is read like an art director would read it — tap a photo to see.",
+    "Weights steer the fusion. Drag the sunset's influence up and watch the prompt rewrite itself.",
+    "Notes steer too. Pin written direction to the board — pick one:",
+    null,
+  ];
+
+  return (
+    <div className="flex h-screen w-screen flex-col overflow-y-auto bg-[#ece9e2]">
+      {/* header */}
+      <div className="flex items-center justify-between px-5 py-3">
+        <span className="flex items-center gap-2">
+          <img src={moodLogo} alt="Mood Director" className="h-6 w-auto" />
+          <span className="text-[10px] font-medium uppercase tracking-[0.32em] text-slate-400">
+            Director
+          </span>
+        </span>
+        <button
+          onClick={onFinish}
+          className="text-xs text-slate-400 underline hover:text-slate-600"
+        >
+          I have the beta password →
+        </button>
+      </div>
+
+      {stage === 0 && (
+        <div className="flex flex-1 items-center justify-center p-6">
+          <div className="mood-pop-in max-w-md text-center">
+            <p className="text-[10px] font-medium uppercase tracking-[0.34em] text-slate-400">
+              Private beta
+            </p>
+            <h1 className="mt-4 font-serif text-3xl font-medium leading-snug tracking-tight text-slate-900">
+              Turn scattered references into one clear creative direction.
+            </h1>
+            <p className="mt-4 text-sm leading-relaxed text-slate-500">
+              Mood Director reads your mood board like an art director and
+              writes the prompt for you. See it work — sixty seconds, no
+              account.
+            </p>
+            <button
+              onClick={() => setStage(1)}
+              className="group mx-auto mt-6 flex items-center gap-2 rounded-md bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+            >
+              Watch it work
+              <ArrowRight size={15} className="transition-transform group-hover:translate-x-0.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {stage >= 1 && stage <= 3 && (
+        <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-4 p-5 lg:flex-row">
+          {/* canvas side */}
+          <div className="flex-1">
+            <p className="mb-3 min-h-[2.5rem] text-sm leading-snug text-slate-600">
+              {captions[stage]}
+            </p>
+            <div className="grid grid-cols-3 gap-3">
+              {samples.map((s, i) => (
+                <div
+                  key={i}
+                  onClick={() => stage >= 1 && analyzedCount > i && setFlipped(flipped === i ? null : i)}
+                  className={`mood-pop-in cursor-pointer overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm transition-all ${
+                    analyzedCount > i ? "opacity-100" : "opacity-0 translate-y-2"
+                  }`}
+                >
+                  {flipped === i ? (
+                    <div className="h-40 overflow-y-auto p-2 text-[10px] leading-snug text-slate-600 sm:h-52">
+                      {s.analysis}
+                    </div>
+                  ) : (
+                    <img
+                      src={s.img}
+                      alt=""
+                      className="h-40 w-full object-cover sm:h-52"
+                      draggable={false}
+                    />
+                  )}
+                  <div className="flex items-center justify-between border-t border-slate-100 px-2 py-1 text-[10px] text-slate-500">
+                    <span className={analyzedCount > i ? "text-emerald-600" : ""}>
+                      {analyzedCount > i ? "✓ analyzed" : "analyzing…"}
+                    </span>
+                    <span className="font-mono">
+                      {i === 1 ? `${(stage >= 2 ? weight : 1).toFixed(1)}x` : `${s.weight === 0.6 && stage >= 2 ? "0.6" : "1.0"}x`}
+                    </span>
+                  </div>
+                  {i === 1 && stage === 2 && (
+                    <div className="border-t border-slate-100 px-2 py-1.5" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="range"
+                        min="1"
+                        max="3"
+                        step="0.1"
+                        value={weight}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          setWeight(v);
+                          if (v >= 2 && !weightDone) {
+                            setWeight(2.3);
+                            setWeightDone(true);
+                          }
+                        }}
+                        className="w-full accent-indigo-600"
+                      />
+                      <p className="text-center text-[9px] uppercase tracking-wide text-slate-400">
+                        influence
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {stage === 3 && (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {TOUR_NOTE_CHOICES.map((c, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setNoteChoice(i)}
+                    className={`rounded-md border px-3 py-2 text-left text-xs transition-colors ${
+                      noteChoice === i
+                        ? "border-amber-400 bg-amber-50 text-amber-900"
+                        : "border-slate-300 bg-white text-slate-600 hover:border-slate-400"
+                    }`}
+                  >
+                    <StickyNote size={11} className="mr-1.5 inline text-amber-500" />
+                    “{c.label}”
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* prompt side */}
+          <div className="w-full shrink-0 lg:w-[360px]">
+            <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                Image-to-text prompt
+              </p>
+              {showPrompt ? (
+                <div key={`${weightDone}-${noteChoice}`} className="mood-pop-in">
+                  <TourPrompt segs={promptSegs} />
+                </div>
+              ) : (
+                <p className="flex items-center gap-2 py-4 text-xs text-slate-400">
+                  <Loader2 size={13} className="animate-spin" /> fusing the
+                  board…
+                </p>
+              )}
+            </div>
+
+            {/* step advance */}
+            <div className="mt-3 flex items-center justify-between">
+              <span className="flex gap-1.5">
+                {[1, 2, 3].map((s) => (
+                  <span
+                    key={s}
+                    className={`h-1.5 w-6 rounded-full ${
+                      s < stage ? "bg-indigo-600" : s === stage ? "bg-indigo-400" : "bg-slate-300"
+                    }`}
+                  />
+                ))}
+              </span>
+              {stage === 1 && showPrompt && (
+                <button
+                  onClick={() => setStage(2)}
+                  disabled={flipped === null}
+                  className="flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+                >
+                  {flipped === null ? "Tap a photo first" : "Next: steer it"}
+                  <ArrowRight size={13} />
+                </button>
+              )}
+              {stage === 2 && (
+                <button
+                  onClick={() => setStage(3)}
+                  disabled={!weightDone}
+                  className="flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+                >
+                  {weightDone ? "Next: add your words" : "Drag the slider up"}
+                  <ArrowRight size={13} />
+                </button>
+              )}
+              {stage === 3 && (
+                <button
+                  onClick={() => setStage(4)}
+                  disabled={noteChoice === null}
+                  className="flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-40"
+                >
+                  {noteChoice === null ? "Pick a note" : "Finish"}
+                  <ArrowRight size={13} />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {stage === 4 && (
+        <div className="flex flex-1 items-center justify-center p-6">
+          <div className="mood-pop-in max-w-md text-center">
+            <h2 className="font-serif text-2xl font-medium leading-snug tracking-tight text-slate-900">
+              That's Mood Director.
+            </h2>
+            <p className="mt-3 text-sm leading-relaxed text-slate-500">
+              Every image read like a brief. Every dial yours. Prompts that
+              rebuild themselves as the board changes — plus a remix kit that
+              turns any board into reusable style lenses.
+            </p>
+            <button
+              onClick={onFinish}
+              className="mx-auto mt-6 flex items-center gap-2 rounded-md bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+            >
+              Enter the beta password <ArrowRight size={15} />
+            </button>
+            <p className="mt-3 text-[11px] text-slate-400">
+              Invite-only while we test — ask the person who sent you here.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Beta entry gate for the hosted web deployment: the whole app sits behind
 // the beta password until a valid signed token is present. Desktop builds
 // and builds without a proxy URL are unaffected.
@@ -1989,6 +2314,23 @@ export default function MoodApp() {
   const [unlocked, setUnlocked] = useState(
     () => !HOSTED_AVAILABLE || isTauri() || !!getHostedToken()
   );
+  // Scripted tour runs before the password gate for first-time visitors on
+  // the hosted web build; unlocked users and desktop builds never see it.
+  const [tourDone, setTourDone] = useState(() => {
+    try {
+      return !!window.localStorage.getItem(TOUR_KEY);
+    } catch {
+      return true;
+    }
+  });
+  const finishTour = () => {
+    try {
+      window.localStorage.setItem(TOUR_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    setTourDone(true);
+  };
   useEffect(() => {
     let alive = true;
     loadPersistedStateAsync()
@@ -1998,6 +2340,7 @@ export default function MoodApp() {
       alive = false;
     };
   }, []);
+  if (!unlocked && !tourDone) return <ScriptedTour onFinish={finishTour} />;
   if (!unlocked) return <BetaGate onUnlock={() => setUnlocked(true)} />;
   if (!initial) {
     return (
