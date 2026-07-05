@@ -943,6 +943,11 @@ Cultural and style reference preservation:
 - Only carry references that appear in the analyses — never introduce a franchise, studio, or artist the analyses do not mention.
 - Named cultural references are compositional anchors — they communicate more visual information in fewer words than generic descriptions.
 
+Board notes:
+- The payload may include board_notes: short written directions the user pinned to the board (mood words, subject requests, constraints, references).
+- Each note is explicit user intent for the whole board. Notes outrank image analyses and dimension weights; only a reference's own positive/negative fields sit at the same level.
+- Weave note content into the final prompt naturally as art direction — never quote a note as commentary. Notes phrased as exclusions belong in the negative prompt.
+
 Always fuse the board into one coherent result. Never list images separately. Never say moodboard, reference image, image 1, image 2, based on the board, or inspired by these images. Avoid generic hype language such as beautiful, stunning, masterpiece, ultra detailed, award winning, and trending. Use concrete visual language: subject, composition, viewpoint, light, palette, texture, atmosphere, medium, finish, and avoidances.
 
 Return exactly the selected output format specified below — never any other format.`;
@@ -1023,6 +1028,7 @@ Rules:
 - Weights scale vocabulary share: higher-weight references shape every lens more strongly, but every reference contributes at least one distinctive trait somewhere in the kit.
 - Fuse across images into one shared language. Where references genuinely diverge, offer the tension as alternatives ("polished chrome or mud-caked iron") rather than dropping one side.
 - If any analysis transcribes text or identifies a logo or brand treatment, capture its typographic voice in TYPOGRAPHY LENS (exact strings in quotes plus treatment).
+- If board_notes are present they are the user's written direction: bias every lens toward them.
 - Avoid hype words: beautiful, stunning, masterpiece, ultra detailed, award winning, breathtaking, cinematic masterpiece.
 
 Return plain text with exactly these labeled sections, each 1-4 sentences of dense prompt language:
@@ -1099,7 +1105,7 @@ function extractRemixLens(kit, key) {
   return out.join("\n").trim();
 }
 
-async function generateRemixKit(cfg, references) {
+async function generateRemixKit(cfg, references, notes = []) {
   const normalized = references
     .map((ref, i) => ({
       index: i + 1,
@@ -1111,11 +1117,22 @@ async function generateRemixKit(cfg, references) {
       analysis: ref.analysis || "",
     }))
     .filter((r) => r.analysis.trim());
+  const boardNotes = (notes || [])
+    .map((n) => (typeof n === "string" ? n : n?.content || ""))
+    .map((s) => s.trim())
+    .filter(Boolean);
   return runCompletion(cfg, {
     system: REMIX_SYSTEM,
     text:
       `Decompose this board of ${normalized.length} weighted reference(s) into the remix kit sections.\n\n` +
-      JSON.stringify({ references: normalized }, null, 2),
+      JSON.stringify(
+        {
+          references: normalized,
+          board_notes: boardNotes.length ? boardNotes : undefined,
+        },
+        null,
+        2
+      ),
     maxTokens: 2000,
   });
 }
@@ -1172,12 +1189,35 @@ function imageContentSig(refs) {
     .join("|");
 }
 
+// Notes pinned to an image board that are toggled into the prompt.
+function enabledBoardNotes(board) {
+  return (board?.items || []).filter(
+    (it) => it.kind === "text" && !it.disabled && (it.content || "").trim()
+  );
+}
+
+// Full synthesis-input signature for a board: images + included notes.
+function boardContentSig(board) {
+  return (
+    imageContentSig(readyImageRefs(board)) +
+    "|N|" +
+    enabledBoardNotes(board)
+      .map((n) => `${n.id}:${n.content}`)
+      .join("|")
+  );
+}
+
 async function synthesizeImagePrompt(
   cfg,
   references,
   selectedFormat = DEFAULT_PROMPT_FORMAT,
-  aspectRatio = DEFAULT_ASPECT_RATIO
+  aspectRatio = DEFAULT_ASPECT_RATIO,
+  notes = []
 ) {
+  const boardNotes = (notes || [])
+    .map((n) => (typeof n === "string" ? n : n?.content || ""))
+    .map((s) => s.trim())
+    .filter(Boolean);
   const normalized = references
     .map((ref, i) => {
       const obj = typeof ref === "string" ? { analysis: ref } : ref || {};
@@ -1258,6 +1298,7 @@ async function synthesizeImagePrompt(
         }
       : null,
     dimension_guidance: dimensionGuidance,
+    board_notes: boardNotes.length ? boardNotes : undefined,
     references: referencesWithDirectives,
   };
 
@@ -1266,6 +1307,9 @@ async function synthesizeImagePrompt(
     `Use selected_format=${selectedFormat}, aspect_ratio=${aspectRatio}, and the weight rules to synthesize one final prompt. ` +
     `Honor dimension_guidance and each reference's directives: steer the result toward dimensions weighted above 1.0 and away from dimensions weighted below 1.0. ` +
     `Apply each reference's positive field as must-include content and its negative field as must-avoid content. ` +
+    (boardNotes.length
+      ? `board_notes carry the user's written direction for the whole board — treat them as binding intent above the analyses. `
+      : "") +
     (characterAnchor?.subject_entities?.length
       ? `The current character anchor names this subject: ${characterAnchor.subject_entities.join(
           ", "
@@ -1439,9 +1483,11 @@ function summarizeInputChange(prev, curr, prevFormat, currFormat) {
   let dims = 0;
   let focus = 0;
   let analyses = 0;
+  let noteEdits = 0;
   for (const r of curr) {
     const p = prevById.get(r.id);
     if (!p) continue;
+    if ((r.note || "") !== (p.note || "")) noteEdits++;
     if (formatImageWeight(r.weight) !== formatImageWeight(p.weight)) weights++;
     if (
       formatDimensionWeights(r.dimensionWeights) !==
@@ -1456,6 +1502,7 @@ function summarizeInputChange(prev, curr, prevFormat, currFormat) {
   if (dims) parts.push(`${dims} dimension edit${dims > 1 ? "s" : ""}`);
   if (focus) parts.push(`${focus} focus edit${focus > 1 ? "s" : ""}`);
   if (analyses) parts.push(`${analyses} analysis edit${analyses > 1 ? "s" : ""}`);
+  if (noteEdits) parts.push(`${noteEdits} note edit${noteEdits > 1 ? "s" : ""}`);
   if (prevFormat !== currFormat)
     parts.push(`format → ${PROMPT_FORMATS[currFormat] || currFormat}`);
   return parts.length ? parts.join(" · ") : "Regenerated (no board change)";
@@ -1760,21 +1807,37 @@ function ImageItem({
   );
 }
 
-function NoteItem({ item, onStartDrag, onDelete, onChange }) {
+function NoteItem({ item, onStartDrag, onDelete, onChange, onToggleDisabled }) {
   return (
     <div
       style={{ left: item.x, top: item.y, zIndex: item.z || 1, width: 220 }}
-      className="absolute select-none rounded-md border border-amber-300 bg-amber-50 shadow-sm"
+      className={`absolute select-none rounded-md border border-amber-300 bg-amber-50 shadow-sm ${
+        item.disabled ? "opacity-60" : ""
+      }`}
     >
       <div
         onMouseDown={(e) => onStartDrag(e, item)}
         className="flex cursor-grab items-center gap-1 rounded-t-md bg-amber-100 px-2 py-1 text-[11px] text-amber-800 active:cursor-grabbing"
       >
-        <StickyNote size={12} /> note
+        <StickyNote size={12} /> {item.disabled ? "note" : "note · in prompt"}
+        {onToggleDisabled && (
+          <button
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => onToggleDisabled(item.id)}
+            className="ml-auto rounded p-0.5 text-amber-500 hover:bg-amber-200 hover:text-amber-800"
+            title={
+              item.disabled
+                ? "Include this note in the prompt"
+                : "Hide this note from the prompt"
+            }
+          >
+            {item.disabled ? <EyeOff size={13} /> : <Eye size={13} />}
+          </button>
+        )}
         <button
           onMouseDown={(e) => e.stopPropagation()}
           onClick={() => onDelete(item.id)}
-          className="ml-auto rounded p-0.5 text-amber-500 hover:bg-rose-50 hover:text-rose-600"
+          className={`${onToggleDisabled ? "" : "ml-auto "}rounded p-0.5 text-amber-500 hover:bg-rose-50 hover:text-rose-600`}
           title="Remove"
         >
           <Trash2 size={13} />
@@ -1782,7 +1845,7 @@ function NoteItem({ item, onStartDrag, onDelete, onChange }) {
       </div>
       <textarea
         value={item.content}
-        placeholder="Type or paste a writing sample…"
+        placeholder="Write direction for this board — mood, subject, constraints…"
         onMouseDown={(e) => e.stopPropagation()}
         onChange={(e) => onChange(item.id, e.target.value)}
         className="block h-28 w-full resize-none rounded-b-md bg-amber-50 p-2 text-[12px] leading-snug text-slate-800 outline-none"
@@ -1855,6 +1918,7 @@ const DEMO_NOTE = `Welcome! This starter board is precomputed so you can see the
 1. Three sample photos, three roles: the sunset is weighted 2.3× (it leads), the typewriter 1.0×, the plant 0.6× (accents only).
 2. Open the prompt history (clock icon, top right) to see how raising the sunset's weight redirected the whole prompt.
 3. Flip any card to read — and edit — what the model saw.
+4. Notes steer too: add one and open its eye to weave written direction into the prompt. (This note's eye is closed, so it stays out.)
 
 Change anything (a weight, an analysis, your own image) and Mood Director regenerates the prompt for real.`;
 
@@ -2201,14 +2265,16 @@ function Mood({ initialState }) {
   /* ---------------------- output generation ---------------------- */
 
   const runImageSynth = useCallback(
-    async (boardId, references, selectedFormat) => {
+    async (boardId, references, selectedFormat, notes = []) => {
       const token = (genToken.current[boardId] || 0) + 1;
       genToken.current[boardId] = token;
       try {
         const prompt = await synthesizeImagePrompt(
           configRef.current,
           references,
-          selectedFormat || DEFAULT_PROMPT_FORMAT
+          selectedFormat || DEFAULT_PROMPT_FORMAT,
+          DEFAULT_ASPECT_RATIO,
+          notes
         );
         if (genToken.current[boardId] !== token) return;
         setOutput(boardId, "ready", prompt);
@@ -2216,14 +2282,25 @@ function Mood({ initialState }) {
           boardId,
           prompt,
           selectedFormat || DEFAULT_PROMPT_FORMAT,
-          references.map((r) => ({
-            id: r.id,
-            weight: r.weight,
-            dimensionWeights: r.dimensionWeights,
-            positive: r.positive || "",
-            negative: r.negative || "",
-            analysis: r.analysis || "",
-          }))
+          [
+            ...references.map((r) => ({
+              id: r.id,
+              weight: r.weight,
+              dimensionWeights: r.dimensionWeights,
+              positive: r.positive || "",
+              negative: r.negative || "",
+              analysis: r.analysis || "",
+            })),
+            ...notes.map((n) => ({
+              id: n.id,
+              weight: 1,
+              dimensionWeights: { ...DEFAULT_DIMENSION_WEIGHTS },
+              positive: "",
+              negative: "",
+              analysis: "",
+              note: n.content || "",
+            })),
+          ]
         );
       } catch (e) {
         if (genToken.current[boardId] !== token) return;
@@ -2274,17 +2351,18 @@ function Mood({ initialState }) {
           return;
         }
         const selectedFormat = board.promptFormat || DEFAULT_PROMPT_FORMAT;
-        const sig =
-          selectedFormat +
-          "|" +
-          ready
-            .map(
-              (r) =>
-                `${r.id}:${formatImageWeight(r.weight)}:${formatDimensionWeights(
-                  r.dimensionWeights
-                )}:p${r.positive || ""}:n${r.negative || ""}:a${r.analysis || ""}`
-            )
-            .join("|");
+        const sig = selectedFormat + "|" + boardContentSig(board);
+        // First sight of a board this session with a persisted output:
+        // adopt the signature instead of regenerating, so app loads don't
+        // re-run every board (and re-bill every synthesis).
+        if (
+          lastSig.current[board.id] === undefined &&
+          board.outputStatus === "ready" &&
+          board.output
+        ) {
+          lastSig.current[board.id] = sig;
+          return;
+        }
         if (lastSig.current[board.id] !== sig) {
           lastSig.current[board.id] = sig;
           if (board.outputStatus !== "loading")
@@ -2297,8 +2375,12 @@ function Mood({ initialState }) {
             negative: r.negative || "",
             analysis: r.analysis,
           }));
+          const notes = enabledBoardNotes(board).map((n) => ({
+            id: n.id,
+            content: n.content.trim(),
+          }));
           scheduleRegen(board.id, () =>
-            runImageSynth(board.id, references, selectedFormat)
+            runImageSynth(board.id, references, selectedFormat, notes)
           );
         }
       } else {
@@ -2337,17 +2419,7 @@ function Mood({ initialState }) {
       );
       if (!ready.length) return;
       const selectedFormat = b.promptFormat || DEFAULT_PROMPT_FORMAT;
-      lastSig.current[b.id] =
-        selectedFormat +
-        "|" +
-        ready
-          .map(
-            (r) =>
-              `${r.id}:${formatImageWeight(r.weight)}:${formatDimensionWeights(
-                r.dimensionWeights
-              )}:p${r.positive || ""}:n${r.negative || ""}:a${r.analysis || ""}`
-          )
-          .join("|");
+      lastSig.current[b.id] = selectedFormat + "|" + boardContentSig(b);
       setOutput(b.id, "loading", b.output);
       runImageSynth(
         b.id,
@@ -2359,7 +2431,8 @@ function Mood({ initialState }) {
           negative: r.negative || "",
           analysis: r.analysis,
         })),
-        selectedFormat
+        selectedFormat,
+        enabledBoardNotes(b).map((n) => ({ id: n.id, content: n.content.trim() }))
       );
     } else {
       const notes = b.items
@@ -2381,7 +2454,7 @@ function Mood({ initialState }) {
     if (!b || b.type !== "image" || b.remixStatus === "loading") return;
     const ready = readyImageRefs(b);
     if (!ready.length) return;
-    const sig = imageContentSig(ready);
+    const sig = boardContentSig(b);
     patchBoard(b.id, { remixStatus: "loading", remixError: "" });
     try {
       const kit = await generateRemixKit(
@@ -2393,7 +2466,8 @@ function Mood({ initialState }) {
           positive: r.positive || "",
           negative: r.negative || "",
           analysis: r.analysis,
-        }))
+        })),
+        enabledBoardNotes(b).map((n) => ({ id: n.id, content: n.content.trim() }))
       );
       patchBoard(b.id, { remix: kit, remixStatus: "ready", remixSig: sig });
     } catch (e) {
@@ -2838,6 +2912,7 @@ function Mood({ initialState }) {
       x: 40,
       y: 60,
       z: ++zRef.current,
+      disabled: true, // walkthrough text — never part of the prompt
     };
     // History tells the weight story: v1 with everything at 1.0, then the
     // current v2 after the sunset was raised to lead.
@@ -2883,7 +2958,7 @@ function Mood({ initialState }) {
     // Mark the canned output as current so the synthesis effect stays idle
     // until the user changes something.
     lastSig.current[boardId] =
-      DEFAULT_PROMPT_FORMAT + "|" + imageContentSig(imageItems);
+      DEFAULT_PROMPT_FORMAT + "|" + boardContentSig(board);
     commit((prev) => [...prev, board]);
     setActiveId(boardId);
   }, [commit, flash]);
@@ -3206,12 +3281,29 @@ function Mood({ initialState }) {
           {activeBoard && (
             <div className="pointer-events-auto absolute left-3 top-3 z-20 flex items-center gap-1 rounded-md border border-slate-300 bg-white/90 p-1 shadow-sm backdrop-blur">
               {activeBoard.type === "image" ? (
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-slate-100"
-                >
-                  <Upload size={13} /> Add images
-                </button>
+                <>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-slate-100"
+                  >
+                    <Upload size={13} /> Add images
+                  </button>
+                  <button
+                    onClick={() => {
+                      const c = centerWorld();
+                      addNote(
+                        activeBoard.id,
+                        "",
+                        c.x + (Math.random() * 40 - 20),
+                        c.y + (Math.random() * 40 - 20)
+                      );
+                    }}
+                    className="flex items-center gap-1 rounded px-2 py-1 text-xs hover:bg-slate-100"
+                    title="Notes with the eye open are woven into the prompt"
+                  >
+                    <StickyNote size={13} /> Add note
+                  </button>
+                </>
               ) : (
                 <button
                   onClick={() => {
@@ -3343,6 +3435,11 @@ function Mood({ initialState }) {
                         onStartDrag={startItemDrag}
                         onDelete={(id) => removeItem(activeBoard.id, id)}
                         onChange={handleNoteChange}
+                        onToggleDisabled={
+                          activeBoard.type === "image"
+                            ? handleToggleDisabled
+                            : undefined
+                        }
                       />
                     )
                   )}
@@ -4694,8 +4791,7 @@ function ImageOutput({ board, analyzing, count, activeCount }) {
 function RemixKit({ board, onBuild, flash }) {
   const [lens, setLens] = useState("all");
   const stale =
-    board.remixStatus === "ready" &&
-    board.remixSig !== imageContentSig(readyImageRefs(board));
+    board.remixStatus === "ready" && board.remixSig !== boardContentSig(board);
   const fragment = extractRemixLens(board.remix, lens);
 
   const copyFragment = () => {
