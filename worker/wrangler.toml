@@ -38,6 +38,9 @@ LIMIT_PASSWORD_USES = "25"
 # Hard ceiling on total requests/day across ALL users (spend protection).
 LIMIT_GLOBAL_PER_DAY = "1000"
 # Model is pinned server-side so clients can't pick an expensive one.
-# 3.1 Flash-Lite: $0.25/M in, $1.50/M out — ~0.8 cents per full board,
-# vision quality at the 2.5 Flash tier (see docs/MONETIZATION.md).
+# 3.1 Flash-Lite: $0.25/M in, $1.50/M out. Boards grow continuously, so
+# costs are per ACTION: ~0.1 cents per image analysis (once per image),
+# ~0.2-0.5 cents per prompt regeneration (scales with board size since
+# every regen re-sends all analyses). A heavy curating session runs
+# ~10 cents. Vision quality at the 2.5 Flash tier.
 GEMINI_MODEL = "gemini-3.1-flash-lite"
