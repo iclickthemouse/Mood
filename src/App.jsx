@@ -277,30 +277,69 @@ function normalizePersistedConfig(cfg = {}) {
   return next;
 }
 
-// A tab crash or force-close mid-analysis persists "loading" states that
-// would otherwise spin forever on next launch — land them somewhere
-// actionable instead (retry button / existing output).
+// A tab crash or force-close mid-write can persist "loading" states (which
+// would spin forever) or malformed records (which crash renders). Every
+// loaded board passes through here: stuck states land somewhere actionable
+// and every field the UI touches is coerced to the shape it expects.
 function normalizeLoadedBoards(boards) {
-  return boards.map((b) => ({
-    ...b,
-    outputStatus:
-      b.outputStatus === "loading"
-        ? b.output
-          ? "ready"
-          : "idle"
-        : b.outputStatus,
-    items: (b.items || []).map((it) =>
-      it.kind === "image" && it.analysisStatus === "loading"
-        ? it.analysis
-          ? { ...it, analysisStatus: "ready" }
-          : {
-              ...it,
-              analysisStatus: "error",
-              analysisError: "Interrupted — hit retry to analyze.",
-            }
-        : it
-    ),
-  }));
+  return boards
+    .filter((b) => b && typeof b === "object" && b.id)
+    .map((b) => ({
+      ...b,
+      name: typeof b.name === "string" ? b.name : "Untitled board",
+      output: typeof b.output === "string" ? b.output : "",
+      outputStatus:
+        b.outputStatus === "loading"
+          ? b.output
+            ? "ready"
+            : "idle"
+          : b.outputStatus,
+      remix: typeof b.remix === "string" ? b.remix : "",
+      remixStatus:
+        b.remixStatus === "loading"
+          ? "idle"
+          : b.remixStatus === "ready" && typeof b.remix !== "string"
+            ? "idle"
+            : b.remixStatus,
+      history: (Array.isArray(b.history) ? b.history : [])
+        .filter((e) => e && typeof e === "object")
+        .map((e) => ({
+          ...e,
+          prompt: typeof e.prompt === "string" ? e.prompt : "",
+          inputs: Array.isArray(e.inputs) ? e.inputs : [],
+        })),
+      items: (Array.isArray(b.items) ? b.items : [])
+        .filter((it) => it && typeof it === "object" && it.id)
+        .map((it) => {
+          const base = {
+            ...it,
+            x: Number.isFinite(it.x) ? it.x : 0,
+            y: Number.isFinite(it.y) ? it.y : 0,
+          };
+          if (it.kind !== "image") {
+            return {
+              ...base,
+              content: typeof it.content === "string" ? it.content : "",
+            };
+          }
+          const analysis =
+            typeof it.analysis === "string" ? it.analysis : null;
+          return {
+            ...base,
+            analysis,
+            analysisStatus:
+              it.analysisStatus === "loading"
+                ? analysis
+                  ? "ready"
+                  : "error"
+                : it.analysisStatus,
+            analysisError:
+              it.analysisStatus === "loading" && !analysis
+                ? "Interrupted — hit retry to analyze."
+                : it.analysisError,
+          };
+        }),
+    }));
 }
 
 // Legacy localStorage persistence — still read for one-time migration into
@@ -1099,7 +1138,7 @@ const REMIX_LENSES = [
 // rather than regex so markdown-decorated labels (e.g. "**STYLE LENS:**")
 // from smaller models still parse.
 function extractRemixLens(kit, key) {
-  if (!kit) return "";
+  if (!kit || typeof kit !== "string") return "";
   if (key === "all") return kit.trim();
   const labels = REMIX_LENSES.filter((l) => l.key !== "all").map((l) => l.key);
   const normalize = (line) => line.replace(/^[\s*#>-]+/, "");
@@ -1529,7 +1568,8 @@ const MAX_HISTORY = 30;
 
 // Human-readable "what changed" between two synthesis input snapshots.
 function summarizeInputChange(prev, curr, prevFormat, currFormat) {
-  if (!prev) return "First prompt";
+  if (!Array.isArray(prev)) return "First prompt";
+  if (!Array.isArray(curr)) curr = [];
   const parts = [];
   const prevById = new Map(prev.map((r) => [r.id, r]));
   const currById = new Map(curr.map((r) => [r.id, r]));
@@ -2396,6 +2436,16 @@ class ErrorBoundary extends React.Component {
           >
             Reload
           </button>
+          <details className="mt-3 max-w-md text-left">
+            <summary className="cursor-pointer text-[11px] text-slate-400">
+              Technical details
+            </summary>
+            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-white/60 p-2 font-mono text-[10px] leading-snug text-slate-500">
+              {String(this.state.error?.message || this.state.error)}
+              {"\n"}
+              {String(this.state.error?.stack || "").split("\n").slice(1, 5).join("\n")}
+            </pre>
+          </details>
         </div>
       );
     }
@@ -2590,10 +2640,11 @@ function Mood({ initialState }) {
   // Human-readable list of what changed since the current prompt was made,
   // shown in the Reprompt banner (diffed against the last history entry).
   const pendingSummary = (() => {
+    try {
     if (!activeBoard || activeBoard.type !== "image" || !activeBoard.outputStale)
       return "";
     const last = activeBoard.history?.[0];
-    if (!last?.inputs) return "";
+    if (!Array.isArray(last?.inputs) || !last.inputs.length) return "";
     const curr = [
       ...readyImageRefs(activeBoard).map((r) => ({
         id: r.id,
@@ -2620,6 +2671,10 @@ function Mood({ initialState }) {
       activeBoard.promptFormat || DEFAULT_PROMPT_FORMAT
     );
     return s === "Regenerated (no board change)" ? "" : s;
+    } catch {
+      // Cosmetic banner text must never take the app down.
+      return "";
+    }
   })();
 
   const flash = useCallback((msg) => {
