@@ -1,6 +1,6 @@
 [package]
 name = "mood"
-version = "0.3.0"
+version = "0.3.1"
 description = "Mood Director — creative direction studio"
 authors = ["Mood Director"]
 edition = "2021"
