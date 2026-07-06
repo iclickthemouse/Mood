@@ -277,6 +277,32 @@ function normalizePersistedConfig(cfg = {}) {
   return next;
 }
 
+// A tab crash or force-close mid-analysis persists "loading" states that
+// would otherwise spin forever on next launch — land them somewhere
+// actionable instead (retry button / existing output).
+function normalizeLoadedBoards(boards) {
+  return boards.map((b) => ({
+    ...b,
+    outputStatus:
+      b.outputStatus === "loading"
+        ? b.output
+          ? "ready"
+          : "idle"
+        : b.outputStatus,
+    items: (b.items || []).map((it) =>
+      it.kind === "image" && it.analysisStatus === "loading"
+        ? it.analysis
+          ? { ...it, analysisStatus: "ready" }
+          : {
+              ...it,
+              analysisStatus: "error",
+              analysisError: "Interrupted — hit retry to analyze.",
+            }
+        : it
+    ),
+  }));
+}
+
 // Legacy localStorage persistence — still read for one-time migration into
 // IndexedDB, and used as a last-resort fallback where IndexedDB is missing.
 function loadLegacyState() {
@@ -294,7 +320,7 @@ function loadLegacyState() {
       ? parsed.promptLibrary
       : [];
     return {
-      boards,
+      boards: normalizeLoadedBoards(boards),
       activeId,
       promptLibrary,
       config: normalizePersistedConfig(parsed.config || {}),
@@ -410,7 +436,7 @@ async function loadPersistedStateAsync() {
         ? activeIdRaw
         : boards[0]?.id || null;
     return {
-      boards,
+      boards: normalizeLoadedBoards(boards),
       activeId,
       promptLibrary: Array.isArray(libRaw) ? libRaw : [],
       config: normalizePersistedConfig(cfgRaw || {}),
@@ -1396,6 +1422,38 @@ function readFileAsText(file) {
   });
 }
 
+// Decode straight from the File/Blob via an object URL — never materializes
+// the full-size original as a base64 string. A handful of phone photos
+// dropped at once used to peak at hundreds of MB (original base64 + decoded
+// bitmap per image, all concurrent) and could crash the tab.
+function downscaleFile(file, maxDim = 1024, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        resolve(c.toDataURL("image/jpeg", quality));
+      } catch (e) {
+        reject(e);
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not decode image"));
+    };
+    img.src = url;
+  });
+}
+
 function downscaleDataUrl(dataUrl, maxDim = 1024, quality = 0.85) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -2307,6 +2365,44 @@ function BetaGate({ onUnlock }) {
   );
 }
 
+// A render crash without a boundary unmounts everything — the dreaded blank
+// screen. Boards live in IndexedDB, so a reload always recovers.
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error("Mood Director crashed:", error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="flex h-screen w-screen flex-col items-center justify-center gap-3 bg-[#ece9e2] p-6 text-center">
+          <img src={moodLogo} alt="Mood Director" className="h-7 w-auto opacity-80" />
+          <p className="mt-2 font-serif text-xl text-slate-800">
+            Something went wrong.
+          </p>
+          <p className="max-w-sm text-sm leading-relaxed text-slate-500">
+            Your boards are saved on this device — reload to pick up right
+            where you left off.
+          </p>
+          <button
+            onClick={() => window.location.reload()}
+            className="mt-2 rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
+          >
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // Async bootstrap: IndexedDB loads are async, so gate the app on the first
 // read (and the one-time localStorage → IndexedDB migration) finishing.
 export default function MoodApp() {
@@ -2340,8 +2436,18 @@ export default function MoodApp() {
       alive = false;
     };
   }, []);
-  if (!unlocked && !tourDone) return <ScriptedTour onFinish={finishTour} />;
-  if (!unlocked) return <BetaGate onUnlock={() => setUnlocked(true)} />;
+  if (!unlocked && !tourDone)
+    return (
+      <ErrorBoundary>
+        <ScriptedTour onFinish={finishTour} />
+      </ErrorBoundary>
+    );
+  if (!unlocked)
+    return (
+      <ErrorBoundary>
+        <BetaGate onUnlock={() => setUnlocked(true)} />
+      </ErrorBoundary>
+    );
   if (!initial) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-[#ece9e2]">
@@ -2349,7 +2455,11 @@ export default function MoodApp() {
       </div>
     );
   }
-  return <Mood initialState={initial} />;
+  return (
+    <ErrorBoundary>
+      <Mood initialState={initial} />
+    </ErrorBoundary>
+  );
 }
 
 function Mood({ initialState }) {
@@ -2899,40 +3009,46 @@ function Mood({ initialState }) {
 
   /* ------------------------- add content ------------------------- */
 
+  // Resolves once the image is decoded and on the canvas; the analysis
+  // continues in the background. Callers adding several files should await
+  // each call so decodes run one at a time (concurrent full-size decodes of
+  // phone photos crashed the tab) while analyses still run in parallel.
   const addImage = useCallback(
     async (boardId, file, x, y) => {
       const id = uid();
+      let src;
       try {
-        const raw = await readFileAsDataUrl(file);
-        const src = await downscaleDataUrl(raw, 1024, 0.85);
-        addItem(boardId, {
-          id,
-          kind: "image",
-          src,
-          x,
-          y,
-          z: ++zRef.current,
-          weight: IMAGE_WEIGHT_DEFAULT,
-          dimensionWeights: { ...DEFAULT_DIMENSION_WEIGHTS },
-          positive: "",
-          negative: "",
-          disabled: false,
-          analysis: null,
-          analysisStatus: "loading",
-        });
-        try {
-          const analysis = await analyzeImage(configRef.current, src);
-          updateItem(boardId, id, { analysis, analysisStatus: "ready" });
-        } catch (e) {
+        src = await downscaleFile(file, 1024, 0.85);
+      } catch {
+        flash(`Couldn't read ${file?.name || "that image file"}.`);
+        return;
+      }
+      addItem(boardId, {
+        id,
+        kind: "image",
+        src,
+        x,
+        y,
+        z: ++zRef.current,
+        weight: IMAGE_WEIGHT_DEFAULT,
+        dimensionWeights: { ...DEFAULT_DIMENSION_WEIGHTS },
+        positive: "",
+        negative: "",
+        disabled: false,
+        analysis: null,
+        analysisStatus: "loading",
+      });
+      analyzeImage(configRef.current, src)
+        .then((analysis) =>
+          updateItem(boardId, id, { analysis, analysisStatus: "ready" })
+        )
+        .catch((e) => {
           updateItem(boardId, id, {
             analysisStatus: "error",
             analysisError: e.message,
           });
           flash("Image analysis failed — check API access.");
-        }
-      } catch {
-        flash("Could not read that image file.");
-      }
+        });
     },
     [addItem, updateItem, flash]
   );
@@ -3049,7 +3165,11 @@ function Mood({ initialState }) {
       if (!files.length) return;
       e.preventDefault();
       const c = centerWorld();
-      files.forEach((f, i) => addImage(board.id, f, c.x + i * 26, c.y + i * 26));
+      (async () => {
+        for (let i = 0; i < files.length; i++) {
+          await addImage(board.id, files[i], c.x + i * 26, c.y + i * 26);
+        }
+      })();
       flash(`Pasted ${files.length} image${files.length > 1 ? "s" : ""}.`);
     };
     window.addEventListener("paste", onPaste);
@@ -3082,7 +3202,9 @@ function Mood({ initialState }) {
           flash("This is an image board — drop image files here.");
           return;
         }
-        imgs.forEach((f, i) => addImage(board.id, f, p.x + i * 26, p.y + i * 26));
+        for (let i = 0; i < imgs.length; i++) {
+          await addImage(board.id, imgs[i], p.x + i * 26, p.y + i * 26);
+        }
       } else {
         const textFiles = files.filter(
           (f) =>
@@ -3112,16 +3234,17 @@ function Mood({ initialState }) {
   );
 
   const onUploadFiles = useCallback(
-    (e) => {
+    async (e) => {
       const board = boardsRef.current.find((b) => b.id === activeIdRef.current);
       const files = Array.from(e.target.files || []);
+      e.target.value = "";
       if (board && board.type === "image") {
         const c = centerWorld();
-        files
-          .filter((f) => f.type.startsWith("image/"))
-          .forEach((f, i) => addImage(board.id, f, c.x + i * 26, c.y + i * 26));
+        const imgs = files.filter((f) => f.type.startsWith("image/"));
+        for (let i = 0; i < imgs.length; i++) {
+          await addImage(board.id, imgs[i], c.x + i * 26, c.y + i * 26);
+        }
       }
-      e.target.value = "";
     },
     [addImage, centerWorld]
   );
@@ -3283,8 +3406,7 @@ function Mood({ initialState }) {
       srcs = await Promise.all(
         DEMO_SAMPLES.map(async (s) => {
           const blob = await (await fetch(s.img)).blob();
-          const raw = await readFileAsDataUrl(blob);
-          return downscaleDataUrl(raw, 1024, 0.85);
+          return downscaleFile(blob, 1024, 0.85);
         })
       );
     } catch {
