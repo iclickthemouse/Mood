@@ -2896,7 +2896,7 @@ function Mood({ initialState }) {
             !it.disabled
         );
         if (ready.length === 0) {
-          lastSig.current[board.id] = null;
+          delete lastSig.current[board.id];
           if (board.output || board.outputStatus !== "idle")
             setOutput(board.id, "idle", "");
           return;
@@ -2932,8 +2932,12 @@ function Mood({ initialState }) {
         // Content changed. Regenerate silently only when a regen can't be
         // wasted; otherwise mark stale and wait for the Reprompt button.
         const prevCount = lastGenCount.current[board.id];
+        // prevSig may be a legacy null (older builds parked empty boards at
+        // null) — only a real string carries a format prefix.
         const prevFormat =
-          prevSig !== undefined ? prevSig.slice(0, prevSig.indexOf("|")) : null;
+          typeof prevSig === "string"
+            ? prevSig.slice(0, prevSig.indexOf("|"))
+            : null;
         const countChanged =
           prevCount !== undefined && prevCount !== ready.length;
         const auto =
@@ -2971,7 +2975,7 @@ function Mood({ initialState }) {
           .map((it) => it.content.trim())
           .filter(Boolean);
         if (notes.length < NOTE_MINIMUM) {
-          lastSig.current[board.id] = null;
+          delete lastSig.current[board.id];
           if (board.output || board.outputStatus !== "idle")
             setOutput(board.id, "idle", "");
           return;
